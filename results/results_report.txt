@@ -1,0 +1,12 @@
+Fitted parameters:
+  Kd_trans: 3.8877292436661133
+  Kd_cis: 0.2744933500894077
+  k_off_cis: 1.6191506900595933
+  k_off_trans: 1.2461161981291076
+  k_cis_trans: 0.00519278345207015
+  dH_cis_binding: -22587.366576087512
+  dH_trans_binding: -7417.600941779554
+  Offset: -5872.634899724343
+  N_14_3_3: 0.27221545755513415
+
+Objective function value (RMSD): 6486.096775629728
