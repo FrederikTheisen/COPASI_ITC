@@ -77,11 +77,11 @@ def _default_bounds(value: float) -> Tuple[float, float]:
             10 * magnitude if value > 0 else -0.1 * value)
 
 
-def split_species_compartment(name: str) -> Tuple[str, Optional[str]]:
+def split_species_compartment(name: str, default_compartment: str, valid_compartments: List[str]) -> Tuple[str, Optional[str]]:
     """Split a species name into base name and optional compartment.
 
     Expected formats:
-      - "A" -> ("A", None)
+      - "A" -> ("A", "cell")
       - "A{cell}" -> ("A", "cell")
       - "A{compartment_name}" -> ("A", "compartment_name")
 
@@ -89,18 +89,35 @@ def split_species_compartment(name: str) -> Tuple[str, Optional[str]]:
     the compartment.
     """
     if not isinstance(name, str):
-        return (str(name), None)
+        return (str(name), default_compartment)
     # prefer last '{' in case base contains braces
-    try:
-        i = name.rfind('{')
-        j = name.rfind('}')
-        if 0 <= i < j:
-            base = name[:i]
-            comp = name[i+1:j]
-            return base, comp
-    except Exception:
-        pass
-    return name, None
+    i = name.rfind('{')
+    j = name.rfind('}')
+    if 0 <= i < j:
+        base = name[:i]
+        comp = name[i+1:j]
+
+        if comp not in valid_compartments:
+            logger.fatal(f"Compartment '{comp}' not in valid compartments: {valid_compartments}")
+            quit()
+
+        return base, comp
+    
+    return name, default_compartment  # default compartment
+
+
+def get_species_concentration(model, compartment = None) -> Dict[str, float]:
+    """Retrieve species concentrations from a basiCO model."""
+    species_df = basico.get_species(model=model).reset_index()
+    conc = {}
+    for _, srow in species_df.iterrows():
+        name = srow['name']
+        comp = srow['compartment']
+        if compartment != None and comp != compartment:
+            continue
+        conc[name] = float(srow['concentration'])
+
+    return conc
 
 
 def make_species_name(base: str, compartment: Optional[str]) -> str:
@@ -180,12 +197,16 @@ def build_config(model_path: Path, output_path: Path) -> None:
     logger.info(f"Finding species...")
     species_df = basico.get_species(model=model)
     species_df = species_df.reset_index()
+
+    # Make a dictionary of all species and which compartments they are found in
+    all_species = species_df['display_name'].tolist()
+
     species_initial_concs_cell: Dict[str, float] = {}
     species_initial_concs_syringe: Dict[str, float] = {}
     for _, srow in species_df.iterrows():
         sname_raw = str(srow.get('display_name'))
         # allow compartment encoded in the name (e.g. 'A{cell}') or in the compartment column
-        base_name, comp_from_name = split_species_compartment(sname_raw)
+        base_name, comp_from_name = split_species_compartment(sname_raw, cell_compartment_name, [cell_compartment_name, syringe_compartment_name])
         compartment_col = srow.get('compartment', None)
         compartment = comp_from_name if comp_from_name else compartment_col
         unit = srow.get('unit', '')
@@ -214,23 +235,26 @@ def build_config(model_path: Path, output_path: Path) -> None:
         if is_cell: species_initial_concs_cell[sname_raw] = float(ival)
         else: species_initial_concs_syringe[sname_raw] = float(ival)
 
-    # Add species initial concentrations to FIXED as suggestions
-    if species_initial_concs_cell: config['FIXED']['cell_species_initial_conc'] = species_initial_concs_cell
-    if species_initial_concs_syringe: config['FIXED']['syringe_species_initial_conc'] = species_initial_concs_syringe
+    # Add species initial concentrations to MODEL_INFO as suggestions
+    if species_initial_concs_cell: config['MODEL_INFO']['cell_species_initial_conc'] = species_initial_concs_cell
+    if species_initial_concs_syringe: config['MODEL_INFO']['syringe_species_initial_conc'] = species_initial_concs_syringe
 
     # Retrieve reactions and enthalpies
     logger.info(f"Getting reactions...")
     reactions_df = basico.get_reactions(model=model).reset_index()
     for _, row in reactions_df.iterrows():
         name = row['name']
-        print(name)
         scheme = row['scheme']
         substrates = row['mapping']['substrate']
         if type(substrates) is str:
             substrates = [substrates]
+
         compartment = cell_compartment_name  # default
+
+        # Filter reactions that either are not in the cell or also happen in the syringe
         if all([syringe_compartment_name in substrate for substrate in substrates]):
             print("Syringe interaction, can't fit this")
+
         for substrate in substrates:
             if syringe_compartment_name in substrate:
                 compartment = syringe_compartment_name
@@ -258,9 +282,9 @@ def build_config(model_path: Path, output_path: Path) -> None:
         'unit': 'J'
     }
 
-    # Add the cell volume to the FIXED section; users may need to adjust units
+    # Add the cell volume to the MODEL_INFO section; users may need to adjust units
     if cell_volume is not None:
-        config['FIXED']['cell_volume'] = cell_volume
+        config['MODEL_INFO']['cell_volume'] = cell_volume
 
     # Write YAML file
     with open(output_path, 'w') as f:
@@ -268,7 +292,7 @@ def build_config(model_path: Path, output_path: Path) -> None:
     logger.info(f"Configuration written to {output_path}")
 
 
-def _parse_data(data_path: Path, inj_delay: float = 120.0) -> Tuple[List[float], List[float], List[float], List[bool], List[float]]:
+def parse_data(data_path: Path, inj_delay: float = 120.0) -> Tuple[List[float], List[float], List[float], List[bool], List[float]]:
     """
     Parse the experimental data file to extract injection volumes, times, heat column names,
     inclusion flags and the molar ratio values.
@@ -337,8 +361,8 @@ def _parse_data(data_path: Path, inj_delay: float = 120.0) -> Tuple[List[float],
         delays = [float(i) * float(inj_delay) for i in range(len(volumes))]
 
     # Determine which injections to include
-    if include_col is not None: include = pd.to_numeric(df[include_col], errors='coerce').fillna(0).astype(int).eq(1).tolist()
-    else: include = [True] * len(volumes)
+    if include_col is not None: include = pd.to_numeric(df[include_col], errors='coerce').fillna(0).astype(int).tolist()
+    else: include = [1] * len(volumes)
 
     # Compute experimental heats by averaging replicate columns if present
     heats: List[float] = []
@@ -368,27 +392,16 @@ def _parse_data(data_path: Path, inj_delay: float = 120.0) -> Tuple[List[float],
     return volumes, delays, heats, include, x
 
 
-def _compute_q(concentrations: Dict[str, float], enthalpy_map: Dict[str, float]) -> float:
+def compute_heat(model, concentrations: Dict[str, float], enthalpy_map: Dict[str, float]) -> float:
     """Compute the heat content Q at a given state.
 
     Q is defined as the sum of the concentration of each bound complex times
     its enthalpy parameter.  Only species present in ``enthalpy_map`` are
     considered.
 
-    Parameters
-    ----------
-    concentrations : dict
-        Mapping from species name to its concentration.
-    enthalpy_map : dict
-        Mapping from species name to the enthalpy (J/mol) associated with
-        binding that species.
-
-    Returns
-    -------
-    float
-        The calculated Q value (J per liter).  Units depend on concentrations
-        being mol/L and enthalpy values being J/mol.
     """
+    # Get unit factor for concentrations
+    #unit_factor = basico.model_info.get_model_units()['quantity_unit']
     q = 0.0
     for species, enthalpy in enthalpy_map.items():
         conc = concentrations.get(species, 0.0)
@@ -396,7 +409,7 @@ def _compute_q(concentrations: Dict[str, float], enthalpy_map: Dict[str, float])
     return q
 
 
-def _simulate(
+def simulate(
         model_path: Path,
         config: Dict,
         volumes: List[float],
@@ -405,47 +418,54 @@ def _simulate(
     ) -> Tuple[List[float], List[float]]:
 
         model = basico.load_model(str(model_path))
+        model_info_cfg = config['MODEL_INFO']
 
-        # collect parameters (FITTED + numeric FIXED) and apply overrides
+        logger.debug("Collecting parameters from config...")
         params: Dict[str, float] = {}
         for pname, info in config.get('FITTED', {}).items():
+            logger.debug(f" -Getting FITTED parameter '{pname}': {float(info.get('value', 0.0))}")
             params[pname] = float(info.get('value', 0.0))
         
         for pname, info in config.get('FIXED', {}).items():
-            # FIXED may be a mapping of names->values or nested dicts
-            if pname in ["cell_species_initial_conc", "syringe_species_initial_conc"]:
-                compartment = pname.split('_')[0]
-                for sname, sval in info.items():
-                    logger.debug(f"Setting {compartment} initial concentration of species '{sname}' to {sval} in model.")
-                    try:
-                        basico.set_species(model=model, name=f"{sname}{'{' + compartment + '}'}", compartment=compartment, initial_concentration=float(sval))
-                    except Exception:
-                        logger.fatal(f"Could not set species '{sname}' to {sval} in model.")
-                        quit()
-            else:
-                if isinstance(info, dict) and 'value' in info: params[pname] = float(info['value'])
-                else: params[pname] = float(info)
+            logger.debug(f" -Getting FIXED parameter '{pname}': {info}")
+            if isinstance(info, dict) and 'value' in info: params[pname] = float(info['value']) # Maybe a dict, just get the 'value'
+            else: params[pname] = float(info) # Could also be a straight number
 
+        logger.debug("Applying parameter overrides from optimizer...")
         if param_values:
             for k, v in param_values.items():
+                logger.debug(f" -Overriding parameter '{k}' to {float(v)}")
                 params[k] = float(v)
 
+        # Apply initial concentration overrides from MODEL_INFO if present
+        cell_species_initial_conc_cfg = model_info_cfg.get('cell_species_initial_conc', {}) or {}
+        syringe_species_initial_conc_cfg = model_info_cfg.get('syringe_species_initial_conc', {}) or {}
+        for sname, sval in cell_species_initial_conc_cfg.items():
+            n_value = params["N_" + sname]
+            logger.debug(f"Setting cell initial concentration of species '{sname}' to {float(sval)} x {n_value} in model.")
+            basico.set_species(model=model, name=sname, compartment=model_info_cfg.get('cell_compartment_name', 'cell'), initial_concentration=float(sval)*float(n_value))
+        for sname, sval in syringe_species_initial_conc_cfg.items():
+            logger.debug(f"Setting syringe initial concentration of species '{sname}' to {float(sval)} in model.")
+            basico.set_species(model=model, name=sname, compartment=model_info_cfg.get('syringe_compartment_name', 'syringe'), initial_concentration=float(sval))
+
         # apply numeric parameters to model
+        logger.debug("Applying parameters to model...")
+        global_params_df = basico.get_parameters(model=model).reset_index()
         for pname, pval in params.items():
-            try:
-                basico.set_parameters(model=model, name=pname, initial_value=float(pval))
-            except Exception:
-                logger.fatal(f"Could not set parameter '{pname}' to {pval} in model.")
-                quit()
+            if pname not in global_params_df['name'].values: continue # Do not set parameters not in model
+            logger.debug(f" -Setting parameter '{pname}' to {pval} in model.")
+            basico.set_parameters(model=model, name=pname, initial_value=float(pval), value=float(pval))
 
         # cell volume
-        cell_volume = float(config.get('FIXED', {}).get('cell_volume', 1.0))
+        cell_volume = float(model_info_cfg['cell_volume'])
+        logger.debug(f"Using cell volume: {cell_volume}")
 
         # build enthalpy mapping from parameters named dH_*
         logger.debug("Building enthalpy mapping from config -> reaction products...")
         enthalpy_map: Dict[str, float] = {}
-        model_info_cfg = config.get('MODEL_INFO', {}) or {}
-        assumed_cell_comp = model_info_cfg.get('cell_compartment_name', 'cell')
+        
+        cell_compartment_name = model_info_cfg['cell_compartment_name']
+        syringe_compartment_name = model_info_cfg['syringe_compartment_name']
 
         reactions_df = basico.get_reactions(model=model).reset_index()
 
@@ -462,27 +482,18 @@ def _simulate(
 
             for prod in products:
                 prod_str = str(prod)
-                base, comp_in_name = split_species_compartment(prod_str)
-                effective_comp = comp_in_name if comp_in_name else assumed_cell_comp
+                base, comp_in_name = split_species_compartment(prod_str, cell_compartment_name, [cell_compartment_name, syringe_compartment_name])
+                effective_comp = comp_in_name if comp_in_name else cell_compartment_name
                 key_with_comp = make_species_name(base, effective_comp)
-                key_no_comp = base
 
                 enthalpy_map[key_with_comp] = enthalpy_map.get(key_with_comp, 0.0) + dh_value
-                enthalpy_map[key_no_comp] = enthalpy_map.get(key_no_comp, 0.0) + dh_value
+                enthalpy_map[base] = enthalpy_map.get(base, 0.0) + dh_value
 
-                logger.debug(f"  Mapped dH '{dh_param}' ({dh_value}) -> product '{prod_str}' as '{key_with_comp}' and '{key_no_comp}'")
+                logger.debug(f"  Mapped dH '{dh_param}' ({dh_value}) -> product '{prod_str}' as '{key_with_comp}' and '{base}'")
 
-        # read model_info for compartment names
-        model_info = config.get('MODEL_INFO', {})
-        cell_compartment = model_info.get('cell_compartment_name', 'cell')
-        syringe_compartment = model_info.get('syringe_compartment_name', 'syringe')
-
-        # run steady state (best-effort)
-        try:
-            basico.run_steadystate(model=model)
-        except Exception:
-            logger.fatal("Could not reach steady state in model; proceeding with current state.")
-            quit()
+        # run steady state equilibration
+        logger.debug("Running steady state equilibration...")
+        basico.run_steadystate(model=model)
 
         if logger.level == logging.DEBUG:
             # Print species concentrations after equilibration
@@ -493,98 +504,90 @@ def _simulate(
                 sconc = srow.get('concentration', 0.0)
                 logger.debug(f"  {sname}: {sconc}")
 
-        # Read post equilibration syringe species concentrations from model
-        syringe_initials_cfg: Dict[str, float] = {}
-        try:
-            species_df_all = basico.get_species(model=model).reset_index()
-            for _, srow in species_df_all.iterrows():
-                sname_raw = str(srow.get('display_name') or srow.get('name') or '')
-                base_name, comp_from_name = split_species_compartment(sname_raw)
-                effective_comp = comp_from_name if comp_from_name else srow.get('compartment', None)
-                if str(effective_comp).lower() != str(syringe_compartment).lower():
-                    continue
-                conc = float(srow.get('concentration'))
-                key = make_species_name(base_name, syringe_compartment)
-                syringe_initials_cfg[key] = conc
-        except Exception:
-            logger.fatal("Could not read syringe species concentrations from model.")
-            quit()
+        # Read post STEADY STATE equilibration syringe species concentrations from model
+        # This for easier reference later during the injection simulations
+        syringe_initials_cfg = get_species_concentration(model, compartment=syringe_compartment_name)
+        total_syringe_conc = sum(syringe_initials_cfg.values())
 
-        # Run titration simulation
+        ################################
+        ### Run titration simulation ###
+        ################################
+
+        logger.debug("Running titration simulation...")
+
+        molar_ratio: List[float] = []
+        M_inj = 0.0
+        M_cell = sum(get_species_concentration(model, compartment=cell_compartment_name).values())
+
+        logger.debug(f"  Total cell species concentration: {M_cell}")
+        logger.debug(f"  Total syringe species concentration: {total_syringe_conc}")
+
         heats: List[float] = []
+        offset = float(params.get('Offset', 0.0))
         i = 0
         for v_inj, d_inj in zip(volumes, delays):
-            logger.debug(f"Simulating injection #{i} of volume {v_inj} at delay {d_inj}...")
+            logger.debug(f" -Simulating injection #{i} of volume {v_inj:.1E} at delay {d_inj}...")
             i += 1
             # get pre-injection concentrations (only consider species in the cell compartment)
-            species_df = basico.get_species(model=model)            
-            conc_pre: Dict[str, float] = {}
-            for _, srow in species_df.iterrows():
-                sname = srow.get('display_name')
-                base_name, comp_from_name = split_species_compartment(str(sname))
-                effective_comp = comp_from_name if comp_from_name else srow.get('compartment', None)
-                if str(effective_comp).lower() != str(cell_compartment).lower():
-                    continue
-                try:
-                    sconc = float(srow.get('concentration', 0.0))
-                except Exception:
-                    sconc = 0.0
-                conc_pre[sname] = sconc
+            conc_pre = get_species_concentration(model, compartment=cell_compartment_name)
 
-            logger.debug(f"Pre-injection concentrations:  " + ", ".join(f"{k}={v:.2f}" for k, v in conc_pre.items()))
+            logger.debug(f"   -PreInj:  " + ", ".join(f"{k}={v:.2f}" for k, v in conc_pre.items()))
 
             # compute Q pre-injection
-            q_pre = _compute_q(conc_pre, enthalpy_map)
+            q_pre = compute_heat(model, conc_pre, enthalpy_map)
 
             # compute post-mix concentrations by simple dilution + syringe input
             new_conc: Dict[str, float] = {}
-            for sname, sconc in conc_pre.items():
-                base_name, _ = split_species_compartment(str(sname))
+            for name, sconc in conc_pre.items():
                 # try to find a syringe species with same base name
-                inj_name = make_species_name(base_name, syringe_compartment)
                 conc_inj = 0.0
                 # priority: explicit syringe species initial concs from config
-                if inj_name in syringe_initials_cfg:
-                    conc_inj = float(syringe_initials_cfg[inj_name])
-                else:
-                    # try to read from model
-                    try:
-                        sres = basico.get_species(model=model, name=inj_name)
-                        if sres is not None and len(sres) > 0:
-                            conc_inj = float(sres.iloc[0].get('concentration', 0.0))
-                    except Exception:
-                        conc_inj = 0.0
+                is_injected = False
+                if name in syringe_initials_cfg:
+                    conc_inj = float(syringe_initials_cfg[name])
+                    is_injected = True
 
-                # mixing (conservative formula assuming constant cell volume)
-                new_val = (sconc * cell_volume + conc_inj * float(v_inj)) / (cell_volume + float(v_inj))
-                new_conc[sname] = new_val
+                # mixing with dilution adjustment
+                new_val = (sconc * cell_volume + conc_inj * v_inj) / (cell_volume + v_inj)
+                new_conc[name] = new_val
                 
-                basico.set_species(model=model, name=sname, initial_concentration=new_val)
+                basico.set_species(model=model, name=make_species_name(name, cell_compartment_name if is_injected else None), initial_concentration=new_val)
  
-            logger.debug("Post-injection concentrations: " + ", ".join(f"{k}={v:.2f}" for k, v in new_conc.items()))
+            logger.debug("   -PostInj: " + ", ".join(f"{k}={v:.2f}" for k, v in new_conc.items()))
 
-            # advance time to injection moment
-            try:
-                basico.run_time_course(model=model, duration=d_inj, update_model=True)
-            except Exception:
-                logger.fatal("Time-course advancement failed.")
-                quit()
+            # Simulate for duration of injection delay
+            basico.run_time_course(model=model, duration=d_inj, update_model=True)
+
+            conc_post = get_species_concentration(model, compartment=cell_compartment_name)
+
+            logger.debug(f"   -PostMix: " + ", ".join(f"{k}={v:.2f}" for k, v in conc_post.items()))
 
             # compute Q post-injection
-            q_post = _compute_q(new_conc, enthalpy_map)
+            q_post = compute_heat(model, conc_post, enthalpy_map)
 
             # compute heat released
             dilution = (v_inj / cell_volume) * 0.5 * (q_pre + q_post)
-            offset = params.get('Offset', 0.0)
+            inj_mass = v_inj * total_syringe_conc
             delta_h = q_post - q_pre + dilution
-            heats.append(delta_h * cell_volume + float(offset))
+            delta_h /= inj_mass
+            delta_h *= cell_volume
+            delta_h += offset
+            heats.append(delta_h)
 
-            logger.debug(f"Injection heat: Q_pre={q_pre}, Q_post={q_post}, dH={delta_h}, dilution={dilution}, offset={offset}, heat={heats[-1]}")
+            # Calculate molar ratio of injected protein species versus cell species
+            f = v_inj / cell_volume
+            M_inj  = (M_inj * cell_volume + inj_mass) / (cell_volume + v_inj)
+            M_cell = (M_cell * cell_volume) / (cell_volume + v_inj)
+            x = M_inj / M_cell
+            molar_ratio.append(x)
 
-        print(heats)
-        quit()
+        if logger.level == logging.DEBUG:
+            # Print injection heats
+            logger.debug("Injection heats:")
+            for idx, heat in enumerate(heats):
+                logger.debug(f"  Injection #{idx}:\t{molar_ratio[idx]:.4g}\t{heat:.4g} J")
 
-        return heats, []
+        return heats, molar_ratio
 
 
 def _objective(
@@ -595,6 +598,7 @@ def _objective(
     delays: List[float],
     heats_exp: List[float],
     model_path: Path,
+    include: List[int],
 ) -> float:
     """Objective function for optimisation.
 
@@ -602,24 +606,11 @@ def _objective(
     simulated heats and the experimental heats for a given set of parameter
     values.
 
-    Parameters
-    ----------
-    param_vector : ndarray
-        Array of parameter values corresponding to ``param_names``.
-    param_names : list of str
-        Names of the parameters being optimised.
-    config : dict
-        Configuration dictionary used by :func:`_simulate`.
-
-    Returns
-    -------
-    float
-        The RMSD between simulated and experimental heats.
     """
     # Build parameter dictionary for simulation
     param_values = {name: value for name, value in zip(param_names, param_vector)}
     try:
-        heats_sim, _ = _simulate(
+        heats_sim, _ = simulate(
             model_path=model_path,
             config=config,
             volumes=volumes,
@@ -627,12 +618,15 @@ def _objective(
             param_values=param_values,
         )
     except Exception as exc:
-        logger.warning(f"Simulation failed for parameters {param_values}: {exc}")
-        quit()
-        return 1e20
+        logger.exception(f"Simulation failed for parameters {param_values}: {exc}")
+        raise
     
     diff = np.array(heats_sim) - np.array(heats_exp)
+    diff = diff * include
     rmsd = float(np.sqrt(np.mean(diff**2)))
+
+
+
     return rmsd
 
 
@@ -669,7 +663,7 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
     # Parse data to obtain injection volumes, times, and experimental heats
     # Use the configured injection delay when no explicit time column exists
     default_inj_delay = config.get('MODEL_INFO', {}).get('INJ_DELAY', 120.0)
-    volumes, delays, heats_exp, include, x = _parse_data(data_path, default_inj_delay)
+    volumes, delays, heats_exp, include, x = parse_data(data_path, default_inj_delay)
 
     # Identify parameters to fit and their bounds
     fitted_params = config.get('FITTED', {})
@@ -692,8 +686,13 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
     logger.info(f"Starting optimisation of {len(fit_names)} parameters...")
 
     # Define objective wrapper capturing constant arguments
+    iter = 0
     def obj_wrapper(x: np.ndarray) -> float:
-        return _objective(x, fit_names, config, volumes, delays, heats_exp, model_path)
+        rmsd = _objective(x, fit_names, config, volumes, delays, heats_exp, model_path, include)
+        nonlocal iter 
+        iter += 1
+        logger.info(f"Iteration {iter}: RMSD = {rmsd:.6g}")
+        return rmsd
 
     # Run optimisation using Nelder-Mead; other methods could be used depending on problem
     result = minimize(
@@ -712,7 +711,7 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
             config['FITTED'][name]['value'] = value
 
     # Generate final simulation with best-fit parameters
-    heats_sim, ratios = _simulate(
+    heats_sim, ratios = simulate(
         model_path=model_path,
         config=config,
         volumes=volumes,
@@ -738,10 +737,16 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
         matplotlib.use('Agg')  # use non-interactive backend
         import matplotlib.pyplot as plt
         plt.figure()
-        plt.plot(ratios, heats_sim, label='Simulated', marker='o')
-        # Align experimental data to same number of points if mismatch
-        min_len = min(len(ratios), len(heats_exp))
-        plt.plot(ratios[:min_len], heats_exp[:min_len], label='Experimental', marker='x')
+        plt.plot(ratios, heats_sim, label='Simulated', marker=None)
+
+        # Plot experimental heats using filled squares for included points and hollow squares for excluded points
+        included_ratios = [r for r, inc in zip(ratios, include) if inc]
+        included_heats = [h for h, inc in zip(heats_exp, include) if inc]
+        excluded_ratios = [r for r, inc in zip(ratios, include) if not inc]
+        excluded_heats = [h for h, inc in zip(heats_exp, include) if not inc]
+        plt.plot(included_ratios, included_heats, linestyle='None', marker='s', markersize=8, label='Experimental', color='black')
+        if excluded_ratios:
+            plt.plot(excluded_ratios, excluded_heats, linestyle='None', marker='s', markersize=8, fillstyle='none', color='black')
         plt.xlabel('Molar ratio (titrant/macromolecule)')
         plt.ylabel('Heat per mole injected (J/mol)')
         plt.title('ITC Isotherm: simulation vs experiment')
@@ -758,13 +763,15 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+
     parser = argparse.ArgumentParser(description="ITC simulation and fitting using COPASI models.")
+    
     subparsers = parser.add_subparsers(dest='command', required=True)
 
     # Subparser for build_config
     parser_build = subparsers.add_parser('build_config', help='Generate a YAML configuration from a COPASI model')
     parser_build.add_argument('--model', type=Path, required=True, help='Path to the COPASI model (.cps)')
-    #parser_build.add_argument('--data', type=Path, default=None, help='Optional CSV file containing experimental data')
     parser_build.add_argument('--output', type=Path, default="config.yaml", help='Path to write the generated YAML configuration')
 
     # Subparser for fit
@@ -774,9 +781,12 @@ def main() -> None:
     parser_fit.add_argument('--config', type=Path, required=True, help='YAML configuration file produced by build_config')
     parser_fit.add_argument('--output', type=Path, required=True, help='Directory where results will be written')
 
+    parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging output')
+
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-    logger.setLevel(logging.DEBUG)
+    if args.verbose:
+        logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
+        logger.setLevel(logging.DEBUG)
     if args.command == 'build_config':
         build_config(args.model, args.output)
     elif args.command == 'fit':

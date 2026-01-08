@@ -1,55 +1,31 @@
 FITTED:
-  Kd_trans:
-    value: 3.8877292436661133
-    min: 0.4
-    max: 40.0
-    unit: umol/l
-  Kd_cis:
-    value: 0.2744933500894077
-    min: 0.020000000000000004
-    max: 2.0
-    unit: umol/l
-  k_off_cis:
-    value: 1.6191506900595933
-    min: 0.2
-    max: 20.0
-    unit: 1/s
-  k_off_trans:
-    value: 1.2461161981291076
-    min: 0.2
-    max: 20.0
-    unit: 1/s
-  k_cis_trans:
-    value: 0.00519278345207015
-    min: 0.0004
-    max: 0.04
-    unit: 1/s
-  dH_cis_binding:
-    value: -22587.366576087512
-    min: -100000.0
-    max: 100000.0
-    unit: J/mol
-  dH_trans_binding:
-    value: -7417.600941779554
+  Kd:
+    value: 32.370210555075815
+    min: 0.001
+    max: 100
+    unit: 1/(umol/l)
+  N_B:
+    value: 0.9548330276682668
+    min: 0.1
+    max: 10.0
+    unit: ''
+  dH_reaction:
+    value: -13667.012316572145
     min: -100000.0
     max: 100000.0
     unit: J/mol
   Offset:
-    value: -5872.634899724343
+    value: 20.366515965973917
     min: -10000.0
     max: 10000.0
     unit: J
-  N_14_3_3:
-    value: 0.27221545755513415
-    min: 0.1
-    max: 10.0
-    unit: ''
-FIXED:
-  K_cis_trans: 0.386962552
-  dH_iso_cell: 0.0
-  cell_volume: 0.0002071
-  species_initial_conc:
-    '14_3_3': 145.00000000000003
-    PRLR_trans{syringe}: 1087.0
-DEFAULTS:
+FIXED: {}
+MODEL_INFO:
   INJ_DELAY: 120.0
+  cell_compartment_name: cell
+  syringe_compartment_name: syringe
+  cell_species_initial_conc:
+    B: 214
+  syringe_species_initial_conc:
+    A{syringe}: 2140
+  cell_volume: 0.0002071
