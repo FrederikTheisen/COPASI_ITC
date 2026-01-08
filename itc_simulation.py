@@ -437,11 +437,15 @@ def simulate(
                 logger.debug(f" -Overriding parameter '{k}' to {float(v)}")
                 params[k] = float(v)
 
+        # Adjusted total cell start concentration
+        M_cell = 0.0
+
         # Apply initial concentration overrides from MODEL_INFO if present
         cell_species_initial_conc_cfg = model_info_cfg.get('cell_species_initial_conc', {}) or {}
         syringe_species_initial_conc_cfg = model_info_cfg.get('syringe_species_initial_conc', {}) or {}
         for sname, sval in cell_species_initial_conc_cfg.items():
             n_value = params["N_" + sname]
+            M_cell += sval
             logger.debug(f"Setting cell initial concentration of species '{sname}' to {float(sval)} x {n_value} in model.")
             basico.set_species(model=model, name=sname, compartment=model_info_cfg.get('cell_compartment_name', 'cell'), initial_concentration=float(sval)*float(n_value))
         for sname, sval in syringe_species_initial_conc_cfg.items():
@@ -517,9 +521,8 @@ def simulate(
 
         molar_ratio: List[float] = []
         M_inj = 0.0
-        M_cell = sum(get_species_concentration(model, compartment=cell_compartment_name).values())
 
-        logger.debug(f"  Total cell species concentration: {M_cell}")
+        logger.debug(f"  Total cell species concentration: {get_species_concentration(model, cell_compartment_name)}")
         logger.debug(f"  Total syringe species concentration: {total_syringe_conc}")
 
         heats: List[float] = []
@@ -575,7 +578,6 @@ def simulate(
             heats.append(delta_h)
 
             # Calculate molar ratio of injected protein species versus cell species
-            f = v_inj / cell_volume
             M_inj  = (M_inj * cell_volume + inj_mass) / (cell_volume + v_inj)
             M_cell = (M_cell * cell_volume) / (cell_volume + v_inj)
             x = M_inj / M_cell
@@ -737,12 +739,12 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
         matplotlib.use('Agg')  # use non-interactive backend
         import matplotlib.pyplot as plt
         plt.figure()
-        plt.plot(ratios, heats_sim, label='Simulated', marker=None)
+        plt.plot(ratios, heats_sim, label='Simulated', marker="o")
 
         # Plot experimental heats using filled squares for included points and hollow squares for excluded points
-        included_ratios = [r for r, inc in zip(ratios, include) if inc]
+        included_ratios = [r for r, inc in zip(x, include) if inc]
         included_heats = [h for h, inc in zip(heats_exp, include) if inc]
-        excluded_ratios = [r for r, inc in zip(ratios, include) if not inc]
+        excluded_ratios = [r for r, inc in zip(x, include) if not inc]
         excluded_heats = [h for h, inc in zip(heats_exp, include) if not inc]
         plt.plot(included_ratios, included_heats, linestyle='None', marker='s', markersize=8, label='Experimental', color='black')
         if excluded_ratios:
@@ -772,14 +774,14 @@ def main() -> None:
     # Subparser for build_config
     parser_build = subparsers.add_parser('build_config', help='Generate a YAML configuration from a COPASI model')
     parser_build.add_argument('--model', type=Path, required=True, help='Path to the COPASI model (.cps)')
-    parser_build.add_argument('--output', type=Path, default="config.yaml", help='Path to write the generated YAML configuration')
+    parser_build.add_argument('--output', type=Path, default=None, help='Path to write the generated YAML configuration (default: config_<model>.yaml)')
 
     # Subparser for fit
     parser_fit = subparsers.add_parser('fit', help='Fit model parameters to experimental data')
     parser_fit.add_argument('--model', type=Path, required=True, help='Path to the COPASI model (.cps)')
     parser_fit.add_argument('--data', type=Path, required=True, help='CSV file with experimental data')
     parser_fit.add_argument('--config', type=Path, required=True, help='YAML configuration file produced by build_config')
-    parser_fit.add_argument('--output', type=Path, required=True, help='Directory where results will be written')
+    parser_fit.add_argument('--output', type=Path, required=False, default=None, help='Directory where results will be written (default: results_<config_name>)')
 
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging output')
 
@@ -787,10 +789,29 @@ def main() -> None:
     if args.verbose:
         logging.basicConfig(level=logging.DEBUG, format='%(levelname)s: %(message)s')
         logger.setLevel(logging.DEBUG)
+
     if args.command == 'build_config':
-        build_config(args.model, args.output)
+        out = args.output if args.output is not None else Path(f"config_{args.model.stem}.yaml")
+        build_config(args.model, out)
     elif args.command == 'fit':
-        fit_model(args.model, args.data, args.config, args.output)
+        # All results are placed under a common top-level 'results' folder.
+        # The specific run folder is created inside it. If the user did not
+        # provide --output, derive the subfolder name from the config file
+        # (strip a leading 'config_' if present). If the user provided an
+        # output path, use its final path component as the subfolder name.
+        base_results = Path('results')
+        if args.output is None:
+            cfg_stem = Path(args.config).stem
+            if cfg_stem.startswith('config_'):
+                cfg_stem = cfg_stem[len('config_'):]
+            subfolder = f"results_{cfg_stem}"
+        else:
+            # Use the provided output's name as the subfolder (so callers
+            # may pass either 'foo' or 'path/to/foo' and the folder will be
+            # placed under ./results/foo).
+            subfolder = Path(args.output).name
+        out_dir = base_results / subfolder
+        fit_model(args.model, args.data, args.config, out_dir)
 
 
 if __name__ == '__main__':
