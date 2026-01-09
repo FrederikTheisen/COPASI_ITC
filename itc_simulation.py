@@ -128,6 +128,31 @@ def _sanitize_for_param(name: str) -> str:
     return ''.join(ch if ch.isalnum() else '_' for ch in name)
 
 
+def check_and_repair_config(config):
+    # Function to check if all fields of the config are valid
+    logger.info("Checking config file...")
+    required_elements = ['FIXED','FITTED','MODEL_INFO']
+    for key in required_elements:
+        if key not in config:
+            logger.warning(f' -Configuration fole missing {key}. Adding empty element.')
+            config[key] = {}
+    
+    if config['FITTED'] is None or len(config['FITTED']) == 0:
+        logger.warning(" -No parameters are being fitted")
+        config['FITTED'] = {}
+    if config['FIXED'] is None:
+        config['FIXED'] = {}
+    
+    required_model_elements = ['cell_compartment_name', 'syringe_compartment_name', 'cell_volume', 'cell_species_initial_conc', 'syringe_species_initial_conc']
+    for key in required_model_elements:
+        if key not in config['MODEL_INFO']:
+            logger.fatal(f' -Configuration file MODEL_INFO missing key {key}. Quitting.')
+            quit()
+
+    logger.info("Config file check complete.")
+    return config
+
+
 def build_config(model_path: Path, output_path: Path) -> None:
     """Generate a minimal YAML configuration template from a COPASI model.
 
@@ -290,6 +315,10 @@ def build_config(model_path: Path, output_path: Path) -> None:
     with open(output_path, 'w') as f:
         yaml.dump(config, f, sort_keys=False)
     logger.info(f"Configuration written to {output_path}")
+
+
+def setup_odes(model_path: Path):
+    
 
 
 def parse_data(data_path: Path, inj_delay: float = 120.0) -> Tuple[List[float], List[float], List[float], List[bool], List[float]]:
@@ -627,8 +656,6 @@ def _objective(
     diff = diff * include
     rmsd = float(np.sqrt(np.mean(diff**2)))
 
-
-
     return rmsd
 
 
@@ -662,6 +689,8 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
+        config = check_and_repair_config(config)
+
     # Parse data to obtain injection volumes, times, and experimental heats
     # Use the configured injection delay when no explicit time column exists
     default_inj_delay = config.get('MODEL_INFO', {}).get('INJ_DELAY', 120.0)
@@ -794,11 +823,6 @@ def main() -> None:
         out = args.output if args.output is not None else Path(f"config_{args.model.stem}.yaml")
         build_config(args.model, out)
     elif args.command == 'fit':
-        # All results are placed under a common top-level 'results' folder.
-        # The specific run folder is created inside it. If the user did not
-        # provide --output, derive the subfolder name from the config file
-        # (strip a leading 'config_' if present). If the user provided an
-        # output path, use its final path component as the subfolder name.
         base_results = Path('results')
         if args.output is None:
             cfg_stem = Path(args.config).stem
@@ -806,9 +830,7 @@ def main() -> None:
                 cfg_stem = cfg_stem[len('config_'):]
             subfolder = f"results_{cfg_stem}"
         else:
-            # Use the provided output's name as the subfolder (so callers
-            # may pass either 'foo' or 'path/to/foo' and the folder will be
-            # placed under ./results/foo).
+            # Use the provided output's name as the subfolder
             subfolder = Path(args.output).name
         out_dir = base_results / subfolder
         fit_model(args.model, args.data, args.config, out_dir)
