@@ -1,44 +1,45 @@
 FITTED:
   Kd_cis:
     value: 0.2
-    min: 0.020000000000000004
-    max: 2.0
+    min: 0.0020000000000000005
+    max: 20.0
     unit: umol/l
   k_cis_trans:
-    value: 0.04
+    value: 0.0262612356205712
     min: 0.0004
-    max: 0.4
+    max: 4
     unit: 1/s
   N_M14_3_3:
-    value: 0.6
+    value: 0.662881979780589
     min: 0.1
     max: 10.0
     unit: ''
   dH_cis_binding:
-    value: -20000.0
+    value: -18616.490006426295
     min: -100000.0
     max: 100000.0
     unit: J/mol
   dH_trans_binding:
-    value: -20000.0
+    value: -15516.987126970515
     min: -100000.0
     max: 100000.0
     unit: J/mol
   Offset:
-    value: -2000.0
+    value: -0
     min: -10000.0
     max: 10000.0
     unit: J
-FIXED:
+
   K_cis_trans:
     value: 0.386962552
     min: 0.0386962552
     max: 3.86962552
     unit: ''
+FIXED:
   R_Kd_trans_cis:
     value: 7.8
-    min: 1.0
-    max: 200.0
+    min: 7
+    max: 10
     unit: ''
 MODEL_INFO:
   INJ_DELAY: 120.0

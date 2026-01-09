@@ -1,44 +1,44 @@
 FITTED:
   Kd_cis:
-    value: 1.1960713775488228
-    min: 0.020000000000000004
-    max: 2.0
+    value: 0.5315816346344917
+    min: 0.0020000000000000005
+    max: 20.0
     unit: umol/l
   k_cis_trans:
-    value: 0.011921277457201384
+    value: 0.029928557009481827
     min: 0.0004
-    max: 0.4
+    max: 4
     unit: 1/s
   N_M14_3_3:
-    value: 0.6486292196952359
+    value: 0.617181380697218
     min: 0.1
     max: 10.0
     unit: ''
   dH_cis_binding:
-    value: -19204.591840085304
+    value: -27563.402637363004
     min: -100000.0
     max: 100000.0
     unit: J/mol
   dH_trans_binding:
-    value: -16729.732750888368
+    value: -16739.950951566498
     min: -100000.0
     max: 100000.0
     unit: J/mol
   Offset:
-    value: 121.82843904674333
+    value: -0.01269317519060436
     min: -10000.0
     max: 10000.0
     unit: J
-FIXED:
   K_cis_trans:
-    value: 0.386962552
+    value: 0.03870222962112985
     min: 0.0386962552
     max: 3.86962552
     unit: ''
+FIXED:
   R_Kd_trans_cis:
     value: 7.8
-    min: 1.0
-    max: 200.0
+    min: 7
+    max: 10
     unit: ''
 MODEL_INFO:
   INJ_DELAY: 120.0
@@ -49,3 +49,4 @@ MODEL_INFO:
   syringe_species_initial_conc:
     PRLR_trans{syringe}: 1087.0
   cell_volume: 0.0002071
+MODEL_CONFIG: {}
