@@ -441,6 +441,11 @@ def simulate(
         model_info_cfg = config['experiment_info']
         setup_odes(model, param_values)
 
+        cell = basico.get_compartments(model_info_cfg['cell_compartment_name'])
+        cell["initial_volume"] = float(model_info_cfg['cell_volume'])
+
+        logger.debug(f'Setting Cell ({model_info_cfg["cell_compartment_name"]}) volume = {float(model_info_cfg["cell_volume"])}')
+
         logger.debug("Collecting parameters from config...")
         params: Dict[str, float] = {}
         for pname, info in config.get('parameters', {}).items():
