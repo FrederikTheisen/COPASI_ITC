@@ -1,0 +1,17 @@
+experiments:
+- name: simple_model
+  model: examples/simple_model.cps
+  data: examples/simple/230906_PRLR_P393V_run1.csv
+  experiment_info:
+    cell_compartment_name: cell
+    syringe_compartment_name: syringe
+    cell_volume: 0.0002071
+    cell_species_initial_conc:
+      B: 213.99999999999997
+    syringe_species_initial_conc:
+      A{syringe}: 2140.0
+  parameters:
+    N_B_simple_model: 0.9538552733483723
+    Kd: 32.11471912965335
+    dH_reaction: -13691.451683197447
+    Offset_simple_model: 0.0010388606304123056

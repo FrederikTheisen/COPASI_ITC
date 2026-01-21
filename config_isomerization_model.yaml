@@ -1,52 +1,36 @@
-FITTED:
-  Kd_cis:
-    value: 0.2
-    min: 0.0020000000000000005
-    max: 20.0
-    unit: umol/l
-  k_cis_trans:
-    value: 0.0262612356205712
-    min: 0.0004
-    max: 4
-    unit: 1/s
-  N_M14_3_3:
-    value: 0.662881979780589
-    min: 0.1
-    max: 10.0
-    unit: ''
-  dH_cis_binding:
-    value: -18616.490006426295
-    min: -100000.0
-    max: 100000.0
-    unit: J/mol
-  dH_trans_binding:
-    value: -15516.987126970515
-    min: -100000.0
-    max: 100000.0
-    unit: J/mol
-  Offset:
-    value: -0
-    min: -10000.0
-    max: 10000.0
-    unit: J
-
-  K_cis_trans:
-    value: 0.386962552
-    min: 0.0386962552
-    max: 3.86962552
-    unit: ''
-FIXED:
-  R_Kd_trans_cis:
-    value: 7.8
-    min: 7
-    max: 10
-    unit: ''
-MODEL_INFO:
-  INJ_DELAY: 120.0
-  cell_compartment_name: cell
-  syringe_compartment_name: syringe
-  cell_species_initial_conc:
-    M14_3_3: 104
-  syringe_species_initial_conc:
-    PRLR_trans{syringe}: 1087.0
-  cell_volume: 0.0002071
+experiments:
+- name: isomerization_model_inj2
+  model: examples/isomerization/isomerization_model.cps
+  data: examples/isomerization/data_W392Y_inj2.csv
+  experiment_info:
+    cell_compartment_name: cell
+    syringe_compartment_name: syringe
+    cell_volume: 0.0002071
+    cell_species_initial_conc:
+      M14_3_3: 147.5
+    syringe_species_initial_conc:
+      PRLR_trans{syringe}: 1397.0
+  parameters:
+    N_M14_3_3_isomerization_model_inj2: 0.74
+    Kd_cis: 0.338
+    k_off_cis: 
+      value: 1.0
+      fit: False
+    k_off_trans: 
+      value: 1.0
+      fit: False
+    k_cis_trans: 
+      value: 0.02
+      fit: False
+    K_cis_trans: 
+      value: 0.386962552
+      fit: False
+    R_Kd_trans_cis: 
+      value: 20.0
+      fit: False
+    dH_cis_binding: -20000
+    dH_trans_binding: -10000.0
+    dH_iso_cell:
+      value: 0
+      fit: False
+    Offset_isomerization_model_inj2: 0

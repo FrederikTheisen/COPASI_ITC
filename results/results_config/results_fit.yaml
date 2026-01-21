@@ -1,21 +1,21 @@
 FITTED:
   Kd:
-    value: 32.370210555075815
+    value: 32.350087718457466
     min: 0.001
     max: 100
     unit: 1/(umol/l)
   N_B:
-    value: 0.9548330276682668
+    value: 0.9549222793608434
     min: 0.1
     max: 10.0
     unit: ''
   dH_reaction:
-    value: -13667.012316572145
+    value: -13731.870038392179
     min: -100000.0
     max: 100000.0
     unit: J/mol
   Offset:
-    value: 20.366515965973917
+    value: 14.916831443181604
     min: -10000.0
     max: 10000.0
     unit: J

@@ -1,10 +1,32 @@
 Fitted parameters:
-  Kd_cis: 0.5315816346344917
-  k_cis_trans: 0.029928557009481827
-  N_M14_3_3: 0.617181380697218
-  dH_cis_binding: -27563.402637363004
-  dH_trans_binding: -16739.950951566498
-  Offset: -0.01269317519060436
-  K_cis_trans: 0.03870222962112985
+  N_M14_3_3_isomerization_model_inj2: 0.7361085181906455
+  Kd_cis: 0.3715366508761549
+  dH_cis_binding: -18436.82848800147
+  dH_trans_binding: -23364.851516803614
+  Offset_isomerization_model_inj2: -0.0031468047163099866
+Fixed parameters:
+  k_off_cis: 1.0
+  k_off_trans: 1.0
+  k_cis_trans: 0.02
+  K_cis_trans: 0.386962552
+  R_Kd_trans_cis: 20.0
+  dH_iso_cell: 0
 
-Objective function value (RMSD): 169.58183591956782
+Uncertainty estimates (local, Hessian-based):
+  nobs: 18
+  npar: 5
+  dof: 13
+  SSE (included points): 248188
+  sigma^2: 19091.4
+
+Parameter	Value	StdErr	CI95_low	CI95_high
+N_M14_3_3_isomerization_model_inj2	0.7361085182	0.00682935	0.7213546063	0.7508624301
+Kd_cis	0.3715366509	0.00880027	0.3525248171	0.3905484846
+dH_cis_binding	-18436.82849	211.761	-18894.31105	-17979.34592
+dH_trans_binding	-23364.85152	211.468	-23821.69994	-22908.00309
+Offset_isomerization_model_inj2	-0.003146804716	51.2852	-110.7980898	110.7917962
+
+Covariance matrix written to: results/results_isomerization_model/covariance_matrix.tsv
+Correlation matrix written to: results/results_isomerization_model/correlation_matrix.tsv
+Experiment RMSDs:
+  isomerization_model_inj2: 117.42331634238073

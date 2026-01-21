@@ -50,6 +50,8 @@ import yaml
 
 logger = logging.getLogger(__name__)
 
+NA = 6.02214076e23  # Avogadro's number (particles per mole)
+
 # Try importing basiCO and SciPy; raise informative errors if unavailable
 try:
     import basico # type: ignore
@@ -73,8 +75,8 @@ def _default_bounds(value: float) -> Tuple[float, float]:
         return (-1.0, 1.0)
     # choose one order of magnitude around the absolute value
     magnitude = abs(value)
-    return (0.1 * magnitude if value > 0 else 1.1 * value,
-            10 * magnitude if value > 0 else -0.1 * value)
+    return (0.01 * magnitude if value > 0 else 1.1 * value,
+            100 * magnitude if value > 0 else -0.1 * value)
 
 
 def split_species_compartment(name: str, default_compartment: str, valid_compartments: List[str]) -> Tuple[str, Optional[str]]:
@@ -124,6 +126,24 @@ def make_species_name(base: str, compartment: Optional[str]) -> str:
     return f"{base}{{{compartment}}}" if compartment else base
 
 
+def get_parameter_name(name, type: str) -> str:
+    if not isinstance(name, str):
+        new_names = []
+        for n in name:
+            new_name = get_parameter_name(n, type)
+            new_names.append(new_name)
+
+        return new_names
+
+    if '_' in name: # May contain specification "type_name"
+        start = name.split('_')[0]
+        if start in ['ode', 'dH', 'N']:
+            basename = name[name.index('_'):]
+            return type + basename
+    
+    return type + "_" + name
+
+
 def _sanitize_for_param(name: str) -> str:
     return ''.join(ch if ch.isalnum() else '_' for ch in name)
 
@@ -170,9 +190,7 @@ def build_config(model_path: Path, output_path: Path) -> None:
     config: Dict[str, Dict] = {
         'FITTED': {},
         'FIXED': {},
-        'MODEL_INFO': {
-            'INJ_DELAY': 120.0,
-        }
+        'MODEL_INFO': {}
     }
 
     # Retrieve global parameters (model values)
@@ -317,8 +335,23 @@ def build_config(model_path: Path, output_path: Path) -> None:
     logger.info(f"Configuration written to {output_path}")
 
 
-def setup_odes(model_path: Path):
-    
+def setup_odes(model, config):
+    # Set up ODEs for each reaction in the cell in order to quantify flux and derive released heat
+    logger.debug(f"Setting up ODEs for tracking of reaction flux")
+    reactions_df = basico.get_reactions(model=model).reset_index()
+    # Collect all dH_ keys from config (FITTED + FIXED) and create a global param + assignment
+    all = config['FITTED'] | config['FIXED']
+    enthalpies = [key[3:] for key in all.keys() if 'dH_' in key]
+
+    logger.debug(f'  Tracked reactions: {enthalpies}')
+
+    for _, row in reactions_df.iterrows():
+        rname = row['name']
+        if rname in enthalpies:
+            ode_name = "ode_" + rname
+            expression = f'({rname}).ParticleFlux'
+            basico.add_parameter(model=model, name=ode_name, status='ode', expression=expression, initial_value=0)
+            logger.debug(f'  -Adding ODE {ode_name}: {expression}')
 
 
 def parse_data(data_path: Path, inj_delay: float = 120.0) -> Tuple[List[float], List[float], List[float], List[bool], List[float]]:
@@ -387,7 +420,7 @@ def parse_data(data_path: Path, inj_delay: float = 120.0) -> Tuple[List[float], 
     if delays_col is not None: delays = df[delays_col].astype(float).tolist()
     else:
         # Use regular spacing based on inj_delay
-        delays = [float(i) * float(inj_delay) for i in range(len(volumes))]
+        delays = [inj_delay] * len(volumes)
 
     # Determine which injections to include
     if include_col is not None: include = pd.to_numeric(df[include_col], errors='coerce').fillna(0).astype(int).tolist()
@@ -429,13 +462,32 @@ def compute_heat(model, concentrations: Dict[str, float], enthalpy_map: Dict[str
     considered.
 
     """
-    # Get unit factor for concentrations
-    #unit_factor = basico.model_info.get_model_units()['quantity_unit']
     q = 0.0
     for species, enthalpy in enthalpy_map.items():
         conc = concentrations.get(species, 0.0)
         q += conc * enthalpy
     return q
+
+def get_odes(model):
+    odes = basico.get_parameters(model=model).reset_index()
+    odes = odes[odes['name'].astype(str).str.contains('ode_')]
+
+    return odes
+
+
+def compute_heat_from_ode(odes,params) -> float:
+    q = 0.0
+    for _, orow in odes.iterrows():
+        ode_name = str(orow['name'])
+        dH_name = get_parameter_name(ode_name, 'dH')
+        ode_value = float(orow['value'])  # particles (or particles/sec)
+        # convert particles -> moles
+        ode_moles = ode_value / NA
+        dH_value = float(params[dH_name])  # J/mol
+        # If ode_value is a rate (particles/sec) multiply ode_moles by the time interval here
+        q += ode_moles * dH_value
+
+    return q * 1000000
 
 
 def simulate(
@@ -448,6 +500,7 @@ def simulate(
 
         model = basico.load_model(str(model_path))
         model_info_cfg = config['MODEL_INFO']
+        setup_odes(model, config)
 
         logger.debug("Collecting parameters from config...")
         params: Dict[str, float] = {}
@@ -554,6 +607,8 @@ def simulate(
         logger.debug(f"  Total cell species concentration: {get_species_concentration(model, cell_compartment_name)}")
         logger.debug(f"  Total syringe species concentration: {total_syringe_conc}")
 
+        q_pre = 0.0
+
         heats: List[float] = []
         offset = float(params.get('Offset', 0.0))
         i = 0
@@ -565,11 +620,8 @@ def simulate(
 
             logger.debug(f"   -PreInj:  " + ", ".join(f"{k}={v:.2f}" for k, v in conc_pre.items()))
 
-            # compute Q pre-injection
-            q_pre = compute_heat(model, conc_pre, enthalpy_map)
-
+            # PERFORM INJECTION
             # compute post-mix concentrations by simple dilution + syringe input
-            new_conc: Dict[str, float] = {}
             for name, sconc in conc_pre.items():
                 # try to find a syringe species with same base name
                 conc_inj = 0.0
@@ -581,28 +633,22 @@ def simulate(
 
                 # mixing with dilution adjustment
                 new_val = (sconc * cell_volume + conc_inj * v_inj) / (cell_volume + v_inj)
-                new_conc[name] = new_val
                 
                 basico.set_species(model=model, name=make_species_name(name, cell_compartment_name if is_injected else None), initial_concentration=new_val)
  
-            logger.debug("   -PostInj: " + ", ".join(f"{k}={v:.2f}" for k, v in new_conc.items()))
-
             # Simulate for duration of injection delay
             basico.run_time_course(model=model, duration=d_inj, update_model=True)
 
-            conc_post = get_species_concentration(model, compartment=cell_compartment_name)
+            # Get ODE fluxes
+            odes_post = get_odes(model)
 
-            logger.debug(f"   -PostMix: " + ", ".join(f"{k}={v:.2f}" for k, v in conc_post.items()))
-
-            # compute Q post-injection
-            q_post = compute_heat(model, conc_post, enthalpy_map)
+            # Calculate 
+            q_post = compute_heat_from_ode(odes_post, params)
 
             # compute heat released
-            dilution = (v_inj / cell_volume) * 0.5 * (q_pre + q_post)
             inj_mass = v_inj * total_syringe_conc
-            delta_h = q_post - q_pre + dilution
+            delta_h = q_post - q_pre
             delta_h /= inj_mass
-            delta_h *= cell_volume
             delta_h += offset
             heats.append(delta_h)
 
@@ -612,11 +658,15 @@ def simulate(
             x = M_inj / M_cell
             molar_ratio.append(x)
 
+            #print(x,q_post - q_pre, q_post_ode - q_pre_ode,delta_h)
+
+            q_pre = q_post
+
         if logger.level == logging.DEBUG:
             # Print injection heats
             logger.debug("Injection heats:")
             for idx, heat in enumerate(heats):
-                logger.debug(f"  Injection #{idx}:\t{molar_ratio[idx]:.4g}\t{heat:.4g} J")
+                logger.debug(f"  Injection #{idx}:\t{molar_ratio[idx]:.7g}\t{heat:.4g} J")
 
         return heats, molar_ratio
 
@@ -722,7 +772,7 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
         rmsd = _objective(x, fit_names, config, volumes, delays, heats_exp, model_path, include)
         nonlocal iter 
         iter += 1
-        logger.info(f"Iteration {iter}: RMSD = {rmsd:.6g}")
+        logger.info(f"Iteration {iter}: RMSD = {rmsd:.10g}")
         return rmsd
 
     # Run optimisation using Nelder-Mead; other methods could be used depending on problem
@@ -731,7 +781,7 @@ def fit_model(model_path: Path, data_path: Path, config_path: Path, output_dir: 
         x0,
         method='Nelder-Mead',
         bounds=fit_bounds,
-        options={'maxiter': 1000, 'disp': False},
+        options={'maxiter': 1000},
     )
 
     logger.info(f"Optimisation completed. Success={result.success}, message={result.message}")
