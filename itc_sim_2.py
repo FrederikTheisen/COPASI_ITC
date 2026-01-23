@@ -154,14 +154,95 @@ def sanitize_for_param(name: str) -> str:
     return ''.join(ch if ch.isalnum() else '_' for ch in name)
 
 
+def _extract_param_value(info):
+    if isinstance(info, dict) and 'value' in info:
+        return info['value']
+    return info
+
+
+def _parse_param_value(raw, pname: str) -> Tuple[Optional[float], Optional[str]]:
+    if isinstance(raw, str):
+        raw_str = raw.strip()
+        if raw_str == "":
+            raise ValueError(f"Parameter '{pname}' has an empty string value.")
+        try:
+            return float(raw_str), None
+        except ValueError:
+            return None, raw_str
+    try:
+        return float(raw), None
+    except (TypeError, ValueError):
+        raise ValueError(f"Parameter '{pname}' has an invalid value: {raw!r}")
+
+
+def resolve_parameter_values(parameters: Dict[str, object], overrides: Optional[Dict[str, float]] = None) -> Dict[str, float]:
+    base_values: Dict[str, float] = {}
+    aliases: Dict[str, str] = {}
+    for pname, info in parameters.items():
+        raw = _extract_param_value(info)
+        value, alias = _parse_param_value(raw, pname)
+        if alias is not None:
+            aliases[pname] = alias
+        else:
+            base_values[pname] = float(value)
+
+    if overrides:
+        for key, value in overrides.items():
+            if key in aliases:
+                logger.warning(f"Ignoring override for aliased parameter '{key}'.")
+                continue
+            base_values[key] = float(value)
+
+    resolved: Dict[str, float] = {}
+    resolving = set()
+
+    def _resolve(name: str) -> float:
+        if name in resolved:
+            return resolved[name]
+        if name in resolving:
+            raise ValueError(f"Circular parameter alias detected at '{name}'.")
+        resolving.add(name)
+        if name in aliases:
+            target = aliases[name]
+            if target == name:
+                raise ValueError(f"Parameter '{name}' cannot alias itself.")
+            if target in aliases or target in base_values:
+                value = _resolve(target)
+            elif overrides and target in overrides:
+                value = float(overrides[target])
+            else:
+                raise ValueError(f"Alias target '{target}' for parameter '{name}' not found.")
+        else:
+            if name in base_values:
+                value = base_values[name]
+            elif overrides and name in overrides:
+                value = float(overrides[name])
+            else:
+                raise ValueError(f"Parameter '{name}' has no value.")
+        resolved[name] = float(value)
+        resolving.remove(name)
+        return resolved[name]
+
+    for pname in list(base_values.keys()) + list(aliases.keys()):
+        _resolve(pname)
+
+    return resolved
+
+
 def check_and_repair_config(config):
     # Function to check if all fields of the config are valid
     logger.info("Checking config file...")
     if 'experiments' not in config:
-        logger.fatal("Config file format not correct. Quitting")
+        logger.fatal("Config does not contain experiments. Quitting")
+        quit()
+    if 'fitting' not in config:
+        config['fitting'] = {}
+        config['fitting']['max_iterations'] = 1000
+        config['fitting']['estimate_errors'] = True
+        logger.warning("Config file did not contain fitting routine information. Adding default values.")
         quit()
 
-    required_elements = ['name','model','data','experiment_info']
+    required_elements = ['name','model_path','data_path','experiment_info']
     required_model_elements = ['cell_compartment_name', 'syringe_compartment_name', 'cell_volume', 'cell_species_initial_conc', 'syringe_species_initial_conc']
     
     for exp in config['experiments']:
@@ -194,6 +275,13 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
     if basico is None:
         raise RuntimeError("The 'basiCO' package is not available. Please install it to use this function.")
 
+    config_out = {'fitting' : 
+        {
+        'max_iterations':   1000,
+        'estimate_errors': True,
+        }   
+    }
+
     experiments_list: List[Dict] = []
     
     for idx, model_path in enumerate(model_paths):
@@ -218,8 +306,8 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
         
         exp_dict: Dict[str, any] = {}
         exp_dict['name'] = exp_name
-        exp_dict['model'] = str(model_path)
-        exp_dict['data'] = str(data_path) if data_path is not None else ""
+        exp_dict['model_path'] = str(model_path)
+        exp_dict['data_path'] = str(data_path) if data_path is not None else ""
         
         # Build experiment_info and parameters
         exp_info: Dict[str, any] = {}
@@ -238,11 +326,14 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
             if 'cell' in low_name:
                 cell_compartment_name = cname
                 cell_volume = size
+                logger.info(f"     -Assigned as cell compartment")
             elif 'syr' in low_name:
                 syringe_compartment_name = cname
+                logger.info(f"     -Assigned as syringe compartment")
         exp_info['cell_compartment_name'] = cell_compartment_name
         exp_info['syringe_compartment_name'] = syringe_compartment_name
         exp_info['cell_volume'] = float(cell_volume) if cell_volume is not None else 1.0
+        exp_info['fallback_inj_delay'] = float(150)
         
         logger.info("  Identifying species...")
         species_df = basico.get_species(model=model).reset_index()
@@ -267,7 +358,7 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
                 pname = f"N_{sanitize_for_param(base_name)}_{exp_name}"
                 if pname not in parameters:
                     parameters[pname] = 1.0
-                    logger.info("      Adding associated N-value")
+                    logger.info("     -Adding associated N-value")
             else:
                 species_initial_concs_syringe[sname_raw] = float(ival)
         
@@ -319,7 +410,7 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
         exp_dict['parameters'] = parameters
         experiments_list.append(exp_dict)
     
-    config_out = {'experiments': experiments_list}
+    config_out['experiments'] = experiments_list
     with open(output_path, 'w') as f:
         yaml.dump(config_out, f, sort_keys=False)
     
@@ -331,6 +422,7 @@ def parse_data(data_path: Path, inj_delay: float = 150.0) -> Tuple[List[float], 
     Parse the csvexperimental data csv file to extract injection volumes, delays, heats,
     inclusion flags and the molar ratio values.
     """
+    logger.info(f"  Parsing data file: {data_path}...")
     df = pd.read_csv(data_path)
     include_col = None
     volumes_col = None
@@ -375,19 +467,19 @@ def parse_data(data_path: Path, inj_delay: float = 150.0) -> Tuple[List[float], 
         quit()
 
     # Print summary of data file parsing
-    logger.info(f"Parsed data file '{data_path}':")
+    
     _volumes = []
     for v in volumes:
         _v = f'{v:.2E}'
         if len(_volumes) == 0 or _v != _volumes[-1]:
             _volumes.append(_v)
-    logger.info(f"  Injection volumes from column: '{volumes_col}': {_volumes}")
-    if delays_col is not None: logger.info(f"  Injection delays from column: '{delays_col}': {delays}")
-    else: logger.info(f"  No injection delay column found; using uniform delay of {inj_delay} seconds")
-    if molar_ratio_col is not None: logger.info(f"  Molar ratios from column: '{molar_ratio_col}'")
-    if include_col is not None: logger.info(f"  Inclusion flags from column: '{include_col}': {include}")
+    logger.info(f"    Injection volumes from column: '{volumes_col}': {_volumes}")
+    if delays_col is not None: logger.info(f"    Injection delays from column: '{delays_col}': {delays}")
+    else: logger.info(f"    No injection delay column found; using uniform delay of {inj_delay} seconds")
+    if molar_ratio_col is not None: logger.info(f"    Molar ratios from column: '{molar_ratio_col}'")
+    if include_col is not None: logger.info(f"    Inclusion flags from column: '{include_col}': {include}")
     
-    logger.info(f"  Heat measurements from columns: {heat_cols}")
+    logger.info(f"    Heat measurements from columns: {heat_cols}")
 
     return { 'volumes': volumes, 'delays': delays, 'heats': heats, 'include': include, 'molar_ratio': x }
 
@@ -439,27 +531,15 @@ def simulate(
         model = basico.load_model(str(model_path))
         exp_name = config['name']
         model_info_cfg = config['experiment_info']
-        setup_odes(model, param_values)
+
+        logger.debug("Collecting parameters from config...")
+        params = resolve_parameter_values(config.get('parameters', {}), param_values)
+        setup_odes(model, params)
 
         cell = basico.get_compartments(model_info_cfg['cell_compartment_name'])
         cell["initial_volume"] = float(model_info_cfg['cell_volume'])
 
         logger.debug(f'Setting Cell ({model_info_cfg["cell_compartment_name"]}) volume = {float(model_info_cfg["cell_volume"])}')
-
-        logger.debug("Collecting parameters from config...")
-        params: Dict[str, float] = {}
-        for pname, info in config.get('parameters', {}).items():
-            fitted = True
-            if isinstance(info, dict) and 'value' in info: 
-                params[pname] = float(info['value']) # Maybe a dict, just get the 'value'
-                if 'fit' in info:
-                    fitted = bool(info['fit'])
-            else: params[pname] = float(info) # Could also be a straight number
-            
-        logger.debug("Applying parameter overrides from optimizer...")
-        if param_values:
-            for k, v in param_values.items():
-                params[k] = float(v)
 
         # Adjusted total cell start concentration
         M_cell = 0.0
@@ -721,7 +801,6 @@ def finite_difference_hessian(
 
     return H, f0
 
-
 def estimate_covariance_from_hessian(
     H: np.ndarray,
     half_sse_at_opt: float,
@@ -772,23 +851,33 @@ def estimate_covariance_from_hessian(
         'npar': npar,
     }
 
+
 def fit_model(config_path: Path, output_dir: Path) -> None:
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
         config = check_and_repair_config(config)
 
+    print()
+    logger.info(f'Starting fitting routine...')
+
     experiments_config = config['experiments']
     num_exps = len(experiments_config)
 
     exp_data: List[Tuple[List[float], List[float], List[float], List[int], List[float]]] = []
+    logger.info(f'Loading {num_exps} experiments...')
     for exp in experiments_config:
         # Parse data to obtain injection volumes, times, and experimental heats
         # Use the default 150s injection delay when no explicit delay column exists
-        data_file = exp.get('data', "")
+        data_file = exp.get('data_path', "")
+        default_delay = float(exp.get('fallbak_inj_delay', 150))
+        logger.info(f'  Experiment {exp["name"]}')
+        logger.info(f'  Model: {exp["model_path"]}')
+        logger.info(f'  Data:  {data_file}')
+        logger.info(f'  Default delay: {default_delay}')
         if not data_file or not Path(data_file).exists():
             raise RuntimeError(f"Data file not specified or not found for experiment '{exp.get('name')}'.")
-        data = parse_data(Path(data_file), 150)
+        data = parse_data(Path(data_file), default_delay)
         exp_data.append(data)
 
     # Identify parameters to fit and their bounds
@@ -797,25 +886,40 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
     fit_bounds: List[Tuple[float, float]] = []
     param_init: Dict[str, float] = {}
     fix_dict: Dict[str, float] = {}
+    alias_params: set = set()
+    all_param_names = set()
+    for exp in experiments_config:
+        all_param_names.update(exp.get('parameters', {}).keys())
+
     for exp in experiments_config:
         for pname, info in exp.get('parameters', {}).items():
-            if not isinstance(info, Dict):
-                info = {'value': info}
-            
-            value = info['value']
-            if 'fit' in info and not info['fit']: 
-                fix_dict[pname] = value
+            if pname in fit_names or pname in fix_dict or pname in alias_params:
                 continue
-            
-            if pname not in fit_names:
-                fit_names.append(pname)
-                pmin = info.get('min', -np.inf)
-                pmax = info.get('max', np.inf)
-                fit_bounds.append((float(pmin), float(pmax)))
-                param_init[pname] = float(value)
-                logger.info(f'  Adding parameter {pname} = {value}')
+
+            raw = _extract_param_value(info)
+            value, alias = _parse_param_value(raw, pname)
+            if alias is not None:
+                if alias not in all_param_names:
+                    raise ValueError(f"Parameter '{pname}' aliases '{alias}', which is not defined in config.")
+                alias_params.add(pname)
+                logger.info(f'  Linking parameter {pname} -> {alias}')
+                continue
+
+            info_dict = info if isinstance(info, dict) else {'value': value}
+            if isinstance(info, dict) and 'fit' in info and not info['fit']:
+                fix_dict[pname] = float(value)
+                continue
+
+            fit_names.append(pname)
+            pmin = info_dict.get('min', -np.inf)
+            pmax = info_dict.get('max', np.inf)
+            fit_bounds.append((float(pmin), float(pmax)))
+            param_init[pname] = float(value)
+            logger.info(f'  Adding parameter {pname} = {value}')
 
     x0 = np.array([param_init[name] for name in fit_names], dtype=float)
+    
+    print()
     logger.info(f"Starting optimisation of {len(fit_names)} parameters across {num_exps} experiments...")
 
     # Define objective wrapper capturing constant arguments
@@ -833,7 +937,7 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
                 logger.debug(f'  {key} = {val:.2e}')
 
         for exp_idx, exp in enumerate(experiments_config):
-            model_path = exp['model']
+            model_path = exp['model_path']
             data = exp_data[exp_idx]
 
             rmsd += _objective(param_dict, exp, data, model_path)
@@ -849,7 +953,7 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
         x0,
         method='Nelder-Mead',
         bounds=fit_bounds,
-        options={'maxiter': 1000},
+        options={'maxiter': int(config['fitting']['max_iterations'])},
     )
 
     logger.info(f"Optimisation completed. Success={result.success}, message={result.message}")
@@ -859,6 +963,8 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
     fitted_values.update(fix_dict)
     for exp in experiments_config:
             for pname in exp.get('parameters', {}):
+                if pname in alias_params:
+                    continue
                 if pname in fitted_values:
                     exp['parameters'][pname] = fitted_values[pname]
 
@@ -869,7 +975,9 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
     # Estimate parameter covariance from a local curvature (Hessian) of 0.5*SSE.
     # This does *not* re-run a full optimisation; it performs only a limited number
     # of extra objective evaluations near the optimum.
-    error_info = estimate_errors(result, fit_names, fix_dict, config, exp_data)
+    error_info = None
+    if config['fitting']['estimate_errors']:
+        error_info = estimate_errors(result, fit_names, fix_dict, config, exp_data)
 
     write_results(result, fit_names, fix_dict, config, exp_data, error_info, output_dir)
     
@@ -886,7 +994,7 @@ def estimate_errors(result, fit_names, fix_dict, config, exp_data):
                 param_dict.update(fix_dict)
                 half_sse = 0.0
                 for exp_idx, exp in enumerate(experiments_config):
-                    model_path = Path(exp['model'])
+                    model_path = Path(exp['model_path'])
                     data = exp_data[exp_idx]
                     half_sse += objective_half_sse(param_dict, exp, data, model_path)
                 return float(half_sse)
@@ -991,7 +1099,7 @@ def write_results(result, fit_names, fix_dict, config, exp_data, error_info, out
 
         for exp_idx, exp in enumerate(experiments_config):
             exp_name = exp['name']
-            model_path = exp['model']
+            model_path = exp['model_path']
             plot_path = output_dir / f'results_plot_{exp_name}.pdf'
             data = exp_data[exp_idx]
 
