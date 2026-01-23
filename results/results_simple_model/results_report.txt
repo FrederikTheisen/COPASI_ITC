@@ -1,8 +1,8 @@
 Fitted parameters:
-  N_B_simple_model: 0.9538552733483723
-  Kd: 32.11471912965335
-  dH_reaction: -13691.451683197447
-  Offset_simple_model: 0.0010388606304123056
+  N_B_simple_model_230906_PRLR_P393V_run1: 0.9538552193363354
+  Kd: 32.114705278685165
+  dH_reaction: -13691.449694088868
+  Offset_simple_model_230906_PRLR_P393V_run1: 0.00021641948543571352
 Fixed parameters:
 
 Uncertainty estimates (local, Hessian-based):
@@ -13,12 +13,13 @@ Uncertainty estimates (local, Hessian-based):
   sigma^2: 22244.5
 
 Parameter	Value	StdErr	CI95_low	CI95_high
-N_B_simple_model	0.9538552733	0.0218047	0.9067491118	1.000961435
-Kd	32.11471913	4.59734	22.1827705	42.04666776
-dH_reaction	-13691.45168	636.007	-15065.46025	-12317.44311
-Offset_simple_model	0.00103886063	260.204	-562.1357886	562.1378664
+N_B_simple_model_230906_PRLR_P393V_run1	0.9538552193	0.023956	0.9021014303	1.005609008
+Kd	32.11470528	5.09038	21.11760627	43.11180428
+dH_reaction	-13691.44969	709.365	-15223.93937	-12158.96002
+Offset_simple_model_230906_PRLR_P393V_run1	0.0002164194854	294.901	-637.0951247	637.0955575
 
 Covariance matrix written to: results/results_simple_model/covariance_matrix.tsv
 Correlation matrix written to: results/results_simple_model/correlation_matrix.tsv
+
 Experiment RMSDs:
-  simple_model: 130.42418179975226
+  simple_model_230906_PRLR_P393V_run1: 130.42418374420643

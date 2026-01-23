@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- generated with COPASI 4.39 (Build 272) (http://www.copasi.org) at 2026-01-22T14:30:47Z -->
+<!-- generated with COPASI 4.39 (Build 272) (http://www.copasi.org) at 2026-01-23T15:35:28Z -->
 <?oxygen RNGSchema="http://www.copasi.org/static/schema/CopasiML.rng" type="xml"?>
 <COPASI xmlns="http://www.copasi.org/static/schema" versionMajor="4" versionMinor="39" versionDevel="272" copasiSourcesModified="0">
   <ListOfFunctions>
@@ -65,71 +65,40 @@ Reaction scheme where the products are created from the reactants and the change
     </ListOfCompartments>
     <ListOfMetabolites>
       <Metabolite key="Metabolite_2" name="A" simulationType="reactions" compartment="Compartment_0" addNoise="false">
-        <MiriamAnnotation>
-<rdf:RDF xmlns:dcterms="http://purl.org/dc/terms/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="#Metabolite_2">
-</rdf:Description>
-</rdf:RDF>
-        </MiriamAnnotation>
       </Metabolite>
       <Metabolite key="Metabolite_1" name="B" simulationType="reactions" compartment="Compartment_0" addNoise="false">
-        <MiriamAnnotation>
-<rdf:RDF xmlns:dcterms="http://purl.org/dc/terms/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="#Metabolite_7">
-</rdf:Description>
-</rdf:RDF>
-        </MiriamAnnotation>
       </Metabolite>
       <Metabolite key="Metabolite_0" name="AB" simulationType="reactions" compartment="Compartment_0" addNoise="false">
-        <MiriamAnnotation>
-<rdf:RDF xmlns:dcterms="http://purl.org/dc/terms/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="#Metabolite_0">
-</rdf:Description>
-</rdf:RDF>
-        </MiriamAnnotation>
       </Metabolite>
       <Metabolite key="Metabolite_10" name="A" simulationType="reactions" compartment="Compartment_3" addNoise="false">
-        <MiriamAnnotation>
-<rdf:RDF xmlns:dcterms="http://purl.org/dc/terms/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="#Metabolite_10">
-</rdf:Description>
-</rdf:RDF>
-        </MiriamAnnotation>
       </Metabolite>
     </ListOfMetabolites>
     <ListOfModelValues>
       <ModelValue key="ModelValue_0" name="Kd" simulationType="fixed" addNoise="false">
-        <MiriamAnnotation>
-<rdf:RDF xmlns:dcterms="http://purl.org/dc/terms/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="#ModelValue_0">
-</rdf:Description>
-</rdf:RDF>
-        </MiriamAnnotation>
         <Unit>
-          1/(umol/l)
+          (umol/l)
         </Unit>
       </ModelValue>
       <ModelValue key="ModelValue_11" name="k_off" simulationType="assignment" addNoise="false">
-        <MiriamAnnotation>
-<rdf:RDF xmlns:dcterms="http://purl.org/dc/terms/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="#ModelValue_11">
-</rdf:Description>
-</rdf:RDF>
-        </MiriamAnnotation>
         <Expression>
           100
         </Expression>
+        <Unit>
+          1/s
+        </Unit>
       </ModelValue>
       <ModelValue key="ModelValue_12" name="k_on" simulationType="assignment" addNoise="false">
-        <MiriamAnnotation>
-<rdf:RDF xmlns:dcterms="http://purl.org/dc/terms/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
-<rdf:Description rdf:about="#ModelValue_12">
-</rdf:Description>
-</rdf:RDF>
-        </MiriamAnnotation>
         <Expression>
           &lt;CN=Root,Model=New Model,Vector=Values[k_off],Reference=InitialValue>/&lt;CN=Root,Model=New Model,Vector=Values[Kd],Reference=InitialValue>
         </Expression>
+        <Unit>
+          (umol/l)/s
+        </Unit>
+      </ModelValue>
+      <ModelValue key="ModelValue_10" name="Kd1" simulationType="fixed" addNoise="false">
+        <Unit>
+          (µmol/l)
+        </Unit>
       </ModelValue>
     </ListOfModelValues>
     <ListOfReactions>
@@ -197,6 +166,7 @@ xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
           <ModelParameter cn="CN=Root,Model=New Model,Vector=Values[Kd]" value="0.001" type="ModelValue" simulationType="fixed"/>
           <ModelParameter cn="CN=Root,Model=New Model,Vector=Values[k_off]" value="100" type="ModelValue" simulationType="assignment"/>
           <ModelParameter cn="CN=Root,Model=New Model,Vector=Values[k_on]" value="100000" type="ModelValue" simulationType="assignment"/>
+          <ModelParameter cn="CN=Root,Model=New Model,Vector=Values[Kd1]" value="1" type="ModelValue" simulationType="fixed"/>
         </ModelParameterGroup>
         <ModelParameterGroup cn="String=Kinetic Parameters" type="Group">
           <ModelParameterGroup cn="CN=Root,Model=New Model,Vector=Reactions[reaction]" type="Reaction">
@@ -225,9 +195,10 @@ xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
       <StateTemplateVariable objectReference="Compartment_0"/>
       <StateTemplateVariable objectReference="Compartment_3"/>
       <StateTemplateVariable objectReference="ModelValue_0"/>
+      <StateTemplateVariable objectReference="ModelValue_10"/>
     </StateTemplate>
     <InitialState type="initialState">
-      0 0 26689766519874396 0 100 100000 1.28873812264e+21 0.00020709999999999999 1 0.001 
+      0 0 26689766519874396 0 100 100000 1.28873812264e+21 0.00020709999999999999 1 0.001 1 
     </InitialState>
   </Model>
   <ListOfTasks>
