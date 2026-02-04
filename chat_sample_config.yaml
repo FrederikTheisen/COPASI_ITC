@@ -3,8 +3,8 @@ fitting:
   estimate_errors: true
 experiments:
 - name: exp_1
-  model_path: examples/simple/simple_test.cps
-  data_path: examples/simple/out_230908_PRLRlong_W392A_run1.csv
+  model_path: simple_test.cps
+  data_path: out_230908_PRLRlong_W392A_run1.csv
   experiment_info:
     cell_compartment_name: cell
     syringe_compartment_name: syringe
@@ -16,7 +16,7 @@ experiments:
       A{syringe}: 0
   parameters:
     N_B_exp_1: 
-      value: 0.82
+      value: 1.0
       fit: true
     Kd: Kd1
     Kd1: 
