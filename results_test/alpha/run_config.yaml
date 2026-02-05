@@ -1,6 +1,7 @@
 fitting:
   max_iterations: 1000
   estimate_errors: true
+  objective: experiments_equal
 experiments:
 - name: exp_1
   model_path: examples/simple/simple_test.cps
@@ -11,16 +12,16 @@ experiments:
     cell_volume: 0.0002071
     fallback_inj_delay: 150.0
     cell_species_initial_conc:
-      B: 0
+      B: 203.0
     syringe_species_initial_conc:
-      A{syringe}: 0
+      A{syringe}: 2019.0
   parameters:
-    N_B_exp_1: 
-      value: 0.818
+    N_B_exp_1:
+      value: 0.8181619796541706
       fit: true
     Kd: Kd1
-    Kd1: 
-      value: 4.01
+    Kd1:
+      value: 4.013243577146714
       log: true
-    dH_reaction: -35120
-    Offset_exp_1: 10.7
+    dH_reaction: -35124.246874340985
+    Offset_exp_1: 10.785868825094555

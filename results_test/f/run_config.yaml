@@ -11,16 +11,16 @@ experiments:
     cell_volume: 0.0002071
     fallback_inj_delay: 150.0
     cell_species_initial_conc:
-      B: 0
+      B: 203.0
     syringe_species_initial_conc:
-      A{syringe}: 0
+      A{syringe}: 2019.0
   parameters:
-    N_B_exp_1: 
-      value: 0.818
+    N_B_exp_1:
+      value: 0.8222216550129107
       fit: true
     Kd: Kd1
-    Kd1: 
-      value: 4.01
+    Kd1:
+      value: 4.033955362023831
       log: true
-    dH_reaction: -35120
-    Offset_exp_1: 10.7
+    dH_reaction: -34954.97476201993
+    Offset_exp_1: 21.262140774106445

@@ -4,18 +4,13 @@ isothermal titration calorimetry (ITC) experiments using COPASI models.  It
 supports two main workflows:
 
 1. GENERATE CONFIG FILE: Extract global parameters and other key
-   information from a COPASI model and produce a YAML configuration file.  The
-   resulting configuration lists parameters under ``FITTED`` and ``FIXED``
-   sections, together with sensible default bounds.  Users should review 
-   the generated YAML and move parameters between ``FITTED`` and ``FIXED`` 
-   as desired before fitting.
+   information from a COPASI model and produce a YAML configuration file.
 
 2. PERFORM MODEL FITTING: Given a COPASI model, a configuration YAML, and a data
    file of integrated injection heats, run a series of steady-state
    simulations to mimic the injections, compute the theoretical heat released
    per injection and optimise the chosen parameters to fit the experimental
-   data.  The script writes the fitted parameter values to a report and
-   generates a plot comparing simulated vs experimental heats.
+   data.
 
 This implementation relies on the `basiCO` package to interface with
 COPASI.  The current environment may not include COPASI or basiCO; the
@@ -37,6 +32,13 @@ Usage::
 The fitting routine will create ``results_report.txt``, ``results_fit.yaml`` and
 ``results_plot.png`` in the specified output directory.
 """
+
+### COLUMN HEADERS ###
+INJECTION_VOLUME_SUBSTRINGS = ['v_inj', 'volume', 'vol']
+INJECTION_DELAY_SUBSTRINGS = ['delay']
+HEAT_DATA_SUBSTRINGS = ['heat', 'enthalpy', 'q', 'peak']
+INCLUDE_FLAG_SUBSTRINGS = ['include']
+
 
 import argparse
 import logging
@@ -240,18 +242,10 @@ def resolve_parameter_values(parameters: Dict[str, object], overrides: Optional[
     return resolved
 
 
-def _default_log_flag(pname: str, exp_names: List[str]) -> bool:
-    if not pname.startswith(("Kd", "Keq")):
-        return False
-    if not exp_names:
-        return True
-    return not any(f"_{exp_name}" in pname for exp_name in exp_names)
-
-
 def _param_uses_log_scale(pname: str, info_dict: Dict[str, object], exp_names: List[str]) -> bool:
     if isinstance(info_dict, dict) and 'log' in info_dict:
         return bool(info_dict['log'])
-    return _default_log_flag(pname, exp_names)
+    return False
 
 
 def _vector_to_param_dict(x: np.ndarray, fit_names: List[str], log_flags: Dict[str, bool]) -> Dict[str, float]:
@@ -264,59 +258,37 @@ def _vector_to_param_dict(x: np.ndarray, fit_names: List[str], log_flags: Dict[s
     return out
 
 
-def _transform_error_info_to_param_scale(error_info: Optional[Dict[str, object]], fit_names: List[str], log_flags: Dict[str, bool]) -> Optional[Dict[str, object]]:
-    if error_info is None:
-        return None
-    if not any(log_flags.get(n, False) for n in fit_names):
-        return error_info
-    cov = np.asarray(error_info.get('cov', None), dtype=float)
-    if cov.size == 0:
-        return error_info
-    x_opt = np.asarray(error_info.get('x_opt', None), dtype=float)
-    if x_opt.size != len(fit_names):
-        return error_info
-
-    scale = np.ones(len(fit_names), dtype=float)
-    for i, n in enumerate(fit_names):
-        if log_flags.get(n, False):
-            scale[i] = float(np.exp(x_opt[i]))
-
-    cov_scaled = cov * scale[:, None] * scale[None, :]
-    se_scaled = np.sqrt(np.diag(cov_scaled))
-    with np.errstate(divide='ignore', invalid='ignore'):
-        denom = np.outer(se_scaled, se_scaled)
-        corr_scaled = np.divide(cov_scaled, denom, out=np.full_like(cov_scaled, np.nan), where=denom != 0)
-
-    updated = dict(error_info)
-    updated['cov'] = cov_scaled
-    updated['se'] = se_scaled
-    updated['corr'] = corr_scaled
-    updated['se_by_name'] = {n: float(se_scaled[i]) for i, n in enumerate(fit_names)}
-    updated['x_opt'] = np.asarray([
-        float(np.exp(x_opt[i])) if log_flags.get(n, False) else float(x_opt[i])
-        for i, n in enumerate(fit_names)
-    ], dtype=float)
-    if 'ci95_by_name' in updated:
-        del updated['ci95_by_name']
-    return updated
-
-
 def check_and_repair_config(config):
     # Function to check if all fields of the config are valid
     logger.info("Checking config file...")
+
     if 'experiments' not in config:
         logger.fatal("Config does not contain experiments. Quitting")
         quit()
-    if 'fitting' not in config:
-        config['fitting'] = {}
-        config['fitting']['max_iterations'] = 1000
-        config['fitting']['estimate_errors'] = True
-        logger.warning("Config file did not contain fitting routine information. Adding default values.")
-        quit()
 
-    required_elements = ['name','model_path','data_path','experiment_info']
+    # Ensure fitting block exists with sensible defaults
+    if 'fitting' not in config or config['fitting'] is None:
+        config['fitting'] = {}
+        logger.warning("Config file did not contain fitting routine information. Adding default values.")
+
+    fitting = config['fitting']
+    fitting.setdefault('max_iterations', 1000)
+    fitting.setdefault('estimate_errors', True)
+    fitting.setdefault('objective', 'experiments\t#experiments or points')  # legacy default
+
+    # Normalise objective mode to one of two supported strings
+    obj_raw = str(fitting.get('objective', 'experiments_equal')).strip().lower()
+    if obj_raw in ('points', 'point', 'all_points', 'points_equal', 'equal_points', 'global'):
+        fitting['objective'] = 'points_equal'
+    elif obj_raw in ('experiments', 'experiment', 'experiments_equal', 'equal_experiments', 'rmsd_sum'):
+        fitting['objective'] = 'experiments_equal'
+    else:
+        logger.warning(f"Unknown objective '{fitting.get('objective')}'. Using 'experiments_equal'.")
+        fitting['objective'] = 'experiments_equal'
+
+    required_elements = ['name', 'model_path', 'data_path', 'experiment_info']
     required_model_elements = ['cell_compartment_name', 'syringe_compartment_name', 'cell_volume', 'cell_species_initial_conc', 'syringe_species_initial_conc']
-    
+
     for exp in config['experiments']:
         logger.info(f' -Checking {exp["name"]}...')
         for key in required_elements:
@@ -332,7 +304,6 @@ def check_and_repair_config(config):
 
     logger.info("Config file check complete.")
     return config
-
 
 def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], output_path: Path) -> None:
     """Generate a YAML configuration file from one or more COPASI models.
@@ -351,6 +322,7 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
         {
         'max_iterations':   1000,
         'estimate_errors': True,
+        'objective': 'experiments',
         }   
     }
 
@@ -397,10 +369,10 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
             if 'cell' in low_name:
                 cell_compartment_name = cname
                 cell_volume = size
-                logger.info(f"     -Assigned as cell compartment")
+                logger.info(f"     - Assigned as cell compartment")
             elif 'syr' in low_name:
                 syringe_compartment_name = cname
-                logger.info(f"     -Assigned as syringe compartment")
+                logger.info(f"     - Assigned as syringe compartment")
         exp_info['cell_compartment_name'] = cell_compartment_name
         exp_info['syringe_compartment_name'] = syringe_compartment_name
         exp_info['cell_volume'] = float(cell_volume) if cell_volume is not None else 1.0
@@ -429,7 +401,7 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
                 pname = f"N_{sanitize_for_param(base_name)}_{exp_name}"
                 if pname not in parameters:
                     parameters[pname] = 1.0
-                    logger.info("     -Adding associated N-value")
+                    logger.info("     - Adding associated N-value")
             else:
                 species_initial_concs_syringe[sname_raw] = float(ival)
         
@@ -449,14 +421,17 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
             # If parameter appears in any previous experiment skip (we already have it)
             if any(name in exp.get('parameters', {}) for exp in experiments_list): 
                 logger.info(f'    Parameter "{name}" already present in previous experiment. Will be fitted globally.')
-                continue    
+                continue
 
-            unit = row['unit']
             val = row['initial_value'] if not pd.isna(row['initial_value']) else row.get('value', np.nan)
             val = float(val) if not pd.isna(val) else 0.0
-            parameters[name] = val
 
-            logger.info(f'    Found {name} = {val}')
+            if name.startswith(("Kd","Keq")):
+                logger.info(f'    Found {name} = {row["initial_value"]} (will be log-transformed for fitting)')
+                parameters[name] = {'value': float(row['initial_value']), 'log': True}    
+            else: 
+                parameters[name] = val
+                logger.info(f'    Found {name} = {val}')
         
         # Reaction enthalpy parameters for cell reactions
         logger.info("  Identifying reactions...")
@@ -472,17 +447,25 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
             dh_param = f"dH_{rname}"
             if not any(dh_param in exp.get('parameters') for exp in experiments_list):
                 parameters[dh_param] = -20000.0
-                logger.info(f'    Adding enthalpy "{dh_param}" for reaction')
+                logger.info(f'     - Adding enthalpy "{dh_param}" for reaction')
         
         # Add dilution heat offset parameter for this experiment
         offset_name = f"Offset_{exp_name}"
-        parameters[offset_name] = -2000
+        parameters[offset_name] = {'value': 0.0, 'fit': True}
         exp_dict['experiment_info'] = exp_info
         exp_dict['parameters'] = parameters
         experiments_list.append(exp_dict)
     
     config_out['experiments'] = experiments_list
     with open(output_path, 'w') as f:
+        f.write("# This config file was generated from the provided COPASI model(s).\n")
+        f.write("# You can edit the parameters as needed before running.\n")
+        f.write("#  - Properties: value, min, max, fit, and log.\n")
+        f.write("# The 'fitting' block contains settings for the optimization:\n")
+        f.write("#  - max_iterations: maximum number of optimization iterations\n")
+        f.write("#  - estimate_errors: compute parameter confidence intervals\n")
+        f.write("#  - objective: 'experiments' to weight each experiment equally, or 'points' to weight each data point equally\n\n")
+
         yaml.dump(config_out, f, sort_keys=False)
     
     logger.info(f"Configuration written to {output_path}")
@@ -498,24 +481,18 @@ def parse_data(data_path: Path, inj_delay: float = 150.0) -> Tuple[List[float], 
     include_col = None
     volumes_col = None
     delays_col = None
-    molar_ratio_col = None
     heat_cols: List[str] = []
     for col in df.columns:
         lcol = col.lower()
-        if include_col is None and 'include' in lcol: include_col = col
-        if volumes_col is None and any(key in lcol for key in ['v_inj', 'volume', 'vol']): volumes_col = col
-        if delays_col is None and 'delay' in lcol: delays_col = col
-        if molar_ratio_col is None and any(key in lcol for key in ['ratio', 'x']): molar_ratio_col = col
-        if any(key in lcol for key in ['heat', 'enthalpy', 'q', 'peak']): heat_cols.append(col)
+        if include_col is None and any(key in lcol for key in INCLUDE_FLAG_SUBSTRINGS): include_col = col
+        if volumes_col is None and any(key in lcol for key in INJECTION_VOLUME_SUBSTRINGS): volumes_col = col
+        if delays_col is None and any(key in lcol for key in INJECTION_DELAY_SUBSTRINGS): delays_col = col
+        if any(key in lcol for key in HEAT_DATA_SUBSTRINGS): heat_cols.append(col)
 
     if volumes_col is None:
         raise ValueError("Data file must contain a column indicating injection volumes (e.g. 'volume' or 'vol').")
 
     volumes = df[volumes_col].astype(float).tolist()
-    # Collect molar ratios if available
-    x: List[float] = []
-    if molar_ratio_col is not None:
-        x = df[molar_ratio_col].astype(float).tolist()
 
     # Determine injection times
     if delays_col is not None: delays = df[delays_col].astype(float).tolist()
@@ -546,7 +523,6 @@ def parse_data(data_path: Path, inj_delay: float = 150.0) -> Tuple[List[float], 
     logger.info(f"      Injection volumes from column: '{volumes_col}': {_volumes}")
     if delays_col is not None: logger.info(f"      Injection delays from column: '{delays_col}': {delays}")
     else: logger.info(f"      No injection delay column found; using uniform delay of {inj_delay} seconds")
-    if molar_ratio_col is not None: logger.info(f"      Molar ratios from column: '{molar_ratio_col}'")
     if include_col is not None: logger.info(f"      Inclusion flags from column: '{include_col}': {include}")
     
     logger.info(f"      Heat measurements from columns: {heat_cols}")
@@ -555,14 +531,14 @@ def parse_data(data_path: Path, inj_delay: float = 150.0) -> Tuple[List[float], 
     metadata = {}
     with open(data_path) as f:
         for line in f.readlines():
-            if '# EXPINFO' in line:
-                key = line.split(' ')[2]
-                value = float(line.split(' ')[-1])
+            if '#EXPINFO' in line:
+                key = line.split(' ')[1]
+                value = float(line.split(' ')[2])
                 metadata[key] = value
                 logger.info(f'      Found {key} = {value}')
 
     logger.info("    File reading completed")
-    return { 'volumes': volumes, 'delays': delays, 'heats': heats, 'include': include, 'molar_ratio': x, 'metadata': metadata }
+    return { 'volumes': volumes, 'delays': delays, 'heats': heats, 'include': include, 'metadata': metadata }
 
 
 def setup_odes(model, parameters):
@@ -712,15 +688,19 @@ def simulate(
 
         heats: List[float] = []
         offset = float(params.get('Offset_' + exp_name, 0.0))
+        v_inj_total = 0.0
         i = 0
         for v_inj, d_inj in zip(volumes, delays):
             logger.debug(f" -Simulating injection #{i} of volume {v_inj:.1E} at delay {d_inj}...")
             i += 1
+            v_inj_total += v_inj
             # get pre-injection concentrations (only consider species in the cell compartment)
             conc_pre = get_species_concentration(model, compartment=cell_compartment_name)
 
             # PERFORM INJECTION
             # compute post-mix concentrations by simple dilution + syringe input
+            f = v_inj / cell_volume
+            alpha = np.exp(-f)
             for name, sconc in conc_pre.items():
                 # try to find a syringe species with same base name
                 conc_inj = 0.0
@@ -731,12 +711,18 @@ def simulate(
                     is_injected = True
 
                 # mixing with dilution adjustment
-                new_val = (sconc * cell_volume + conc_inj * v_inj) / (cell_volume + v_inj)
+                # new_val = (sconc * cell_volume + conc_inj * v_inj) / (cell_volume + v_inj)
+
+                new_val = sconc * alpha + conc_inj * (1 - alpha)
                 
                 basico.set_species(model=model, name=make_species_name(name, cell_compartment_name if is_injected else None), initial_concentration=new_val)
  
             # Simulate for duration of injection delay
             basico.run_time_course(model=model, duration=d_inj, update_model=True)
+
+            #conc = get_species_concentration(model, compartment=cell_compartment_name)
+            #for name, sconc in conc.items():
+            #    print(name, sconc)
 
             # Get ODE fluxes
             odes_post = get_odes(model)
@@ -748,12 +734,12 @@ def simulate(
             inj_mass = v_inj * total_syringe_conc
             delta_h = q_post - q_pre
             delta_h /= inj_mass
-            delta_h += offset
+            delta_h += (offset * v_inj * 1000000)
             heats.append(delta_h)
 
             # Calculate molar ratio of injected protein species versus cell species
-            M_inj  = (M_inj * cell_volume + inj_mass) / (cell_volume + v_inj)     
-            M_cell = (M_cell * cell_volume) / (cell_volume + v_inj)
+            M_inj  = M_inj * alpha +  total_syringe_conc * (1 - alpha)  #(M_inj * cell_volume + inj_mass) / (cell_volume + v_inj)     
+            M_cell = M_cell * alpha                                     #(M_cell * cell_volume) / (cell_volume + v_inj)
             x = M_inj / M_cell
             molar_ratio.append(x)
 
@@ -765,8 +751,9 @@ def simulate(
             for idx, heat in enumerate(heats):
                 logger.debug(f"  Injection #{idx}:\t{molar_ratio[idx]:.7g}\t{heat:.4g} J")
 
-        return heats, molar_ratio
+        #quit()
 
+        return heats, molar_ratio
 
 def _objective(param_dict: Dict, config: Dict, data: Dict, model_path: Path) -> float:
     #heats_sim, _ = simulate(model_path=model_path, config=config, volumes=data['volumes'], delays=data['delays'], param_values=param_dict)
@@ -854,15 +841,6 @@ def cov_from_jacobian_svd(J: np.ndarray, sse: float, dof: int, rcond: float = 1e
     return cov, se, corr, diag_info
 
 
-# ====================================================================================
-# New Gauss–Newton error estimation utilities
-#
-# The following functions implement a robust parameter uncertainty estimation based on
-# the Gauss–Newton approximation of the covariance matrix.  They leverage SciPy's
-# numerical differentiation machinery when available to compute the Jacobian of the
-# residual vector at the optimum.  When SciPy is not available, a finite
-# difference fallback is provided.
-
 def _residuals_concat(
     x_fit: np.ndarray,
     fit_names: List[str],
@@ -899,16 +877,28 @@ def _compute_jacobian(
     x0: np.ndarray,
     bounds: Optional[List[Tuple[float, float]]] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Compute the Jacobian of a residual function using numerical differentiation."""
+    """Compute the Jacobian of a residual function using numerical differentiation.
+
+    Parameters
+    ----------
+    residuals_func
+        Callable taking x (1D array) and returning residual vector (1D array).
+    x0
+        Point at which to compute the Jacobian.
+    bounds
+        Optional bounds (unused by the fallback implementation).
+
+    Returns
+    -------
+    J, r0
+        Jacobian matrix and residual vector at x0.
+    """
     x0 = np.asarray(x0, dtype=float)
-    # Build a small caching wrapper around the residuals function.  SciPy's
-    # approx_derivative will call the function multiple times at nearby points;
-    # memoising these evaluations avoids redundant and expensive simulations.
+
+    # Caching wrapper to avoid repeated expensive simulations.
     cache: Dict[Tuple[float, ...], np.ndarray] = {}
 
     def f_cached(x: np.ndarray) -> np.ndarray:
-        # Use a tuple of floats as the cache key; convert to float to avoid
-        # comparisons of numpy scalars which can be slow.
         key = tuple(float(v) for v in x)
         if key in cache:
             return cache[key]
@@ -916,14 +906,8 @@ def _compute_jacobian(
         cache[key] = val
         return val
 
-    # Evaluate residuals at x0 to obtain the base value and ensure caching.
     r0 = f_cached(x0)
 
-    # Use the two-point rule for efficiency.  The default relative
-    # stepping scheme inside SciPy picks a step size based on the
-    # machine precision and the scale of each variable.  We also pass
-    # the precomputed residual value via f0 to avoid an extra function
-    # call.
     J = _approx_derivative(
         f_cached,
         x0,
@@ -957,13 +941,14 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
         # Parse data to obtain injection volumes, times, and experimental heats
         # Use the default 150s injection delay when no explicit delay column exists
         data_file = exp.get('data_path', "")
-        default_delay = float(exp.get('fallbak_inj_delay', 150))
+        exp_info = exp.get('experiment_info', {}) or {}
+        default_delay = float(exp_info.get('fallback_inj_delay', exp_info.get('fallbak_inj_delay', 150)))
         logger.info(f'  Experiment {exp["name"]}')
         logger.info(f'    Model: {exp["model_path"]}')
         logger.info(f'    Data:  {data_file}')
         logger.info(f'    Default delay: {default_delay}')
         if not data_file or not Path(data_file).exists():
-            raise RuntimeError(f"Data file not specified or not found for experiment '{exp.get('name')}'.")
+            raise RuntimeError(f"Data file not specified or not found for experiment '{exp.get('name')}': {data_file}.")
         data = parse_data(Path(data_file), default_delay)
 
         metadata = data.get('metadata') or {}
@@ -1048,29 +1033,48 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
     ##################################
     ### Objective function wrapper ###
     ##################################
+    objective_mode = str(config.get('fitting', {}).get('objective', 'experiments_equal')).strip().lower()
+    if objective_mode not in ('points_equal', 'experiments_equal'):
+        # check_and_repair_config should normalise this, but keep a safe fallback.
+        objective_mode = 'experiments_equal'
+
+    logger.info(f"Objective mode: {objective_mode}")
+
     iter = 0
+
     def obj_wrapper(x: np.ndarray) -> float:
         nonlocal iter
-
-        rmsd = 0.0
 
         param_dict = _vector_to_param_dict(x, fit_names, log_flags)
         param_dict.update(fix_dict)
 
         if logger.level == logging.DEBUG:
-            for key,val in param_dict.items():
+            for key, val in param_dict.items():
                 logger.debug(f'  {key} = {val:.2e}')
 
-        for exp_idx, exp in enumerate(experiments_config):
-            model_path = exp['model_path']
-            data = exp_data[exp_idx]
+        if objective_mode == 'points_equal':
+            # Treat every included data point equally: one concatenated residual vector.
+            residuals_all: List[np.ndarray] = []
+            for exp_idx, exp in enumerate(experiments_config):
+                model_path = exp['model_path']
+                data = exp_data[exp_idx]
+                residuals_all.append(get_residuals(param_dict, exp, data, model_path))
+            if residuals_all:
+                r = np.concatenate(residuals_all)
+                obj = float(np.sqrt(np.mean(r ** 2))) if r.size else 0.0
+            else:
+                obj = 0.0
+        else:
+            # Treat each experiment equally: sum of per-experiment RMSDs.
+            obj = 0.0
+            for exp_idx, exp in enumerate(experiments_config):
+                model_path = exp['model_path']
+                data = exp_data[exp_idx]
+                obj += _objective(param_dict, exp, data, model_path)
 
-            rmsd += _objective(param_dict, exp, data, model_path)
-        
         iter += 1
-        logger.info(f"Iteration {iter}: \tRMSD = {rmsd:.20g}")
-        
-        return rmsd
+        logger.info(f"Iteration {iter}:	Objective = {obj:.20g}")
+        return obj
 
     ################################
     ### Run optimisation         ###
@@ -1085,7 +1089,7 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
         options={'maxiter': int(config['fitting']['max_iterations'])},
     )
 
-    logger.info(f"Optimisation completed. Success={result.success}, message={result.message}")
+    logger.info(f"Optimisation completed. Success={result.success}, message={result.message}\n")
 
     #################################
     ### Process and write results ###
@@ -1125,7 +1129,6 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
                 log_flags,
                 fit_bounds,
             )
-            error_info = _transform_error_info_to_param_scale(error_info, fit_names, log_flags)
         else:
             error_info = None
 
@@ -1140,100 +1143,125 @@ def estimate_errors(
     log_flags: Dict[str, bool],
     fit_bounds: Optional[List[Tuple[float, float]]] = None,
 ) -> Optional[Dict[str, object]]:
-    """Estimate parameter uncertainties via a Gauss-Newton + SVD pipeline."""
+    """Estimate parameter uncertainties via Gauss-Newton + SVD.
+
+    Notes
+    -----
+    - The Jacobian is computed for the concatenated residual vector across all included
+      points (each point weighted equally).
+    - Standard errors are reported in physical parameter units. For log-scaled parameters,
+      the covariance is mapped to physical space using a first-order (delta-method) scaling.
+    - 95% confidence intervals are computed in fit space and transformed to physical space
+      for log-scaled parameters by exponentiation of the bounds.
+    """
     experiments_config = config['experiments']
     error_info: Optional[Dict[str, object]] = None
+
     try:
         npar = len(fit_names)
-        if npar > 0:
-            # Define a residual function that concatenates residuals across all experiments.
-            def _residuals(x: np.ndarray) -> np.ndarray:
-                return _residuals_concat(x, fit_names, fix_dict, experiments_config, exp_data, log_flags)
+        if npar == 0:
+            return None
 
-            logger.info("Estimating parameter covariance (Gauss-Newton + SVD)...")
+        # Define a residual function that concatenates residuals across all experiments.
+        def _residuals(x: np.ndarray) -> np.ndarray:
+            return _residuals_concat(x, fit_names, fix_dict, experiments_config, exp_data, log_flags)
 
-            # Compute Jacobian and residual vector at the optimum.
-            x_opt = np.asarray(result.x, dtype=float)
+        logger.info("Estimating parameter covariance (Gauss-Newton + SVD)...")
 
-            J, r0 = _compute_jacobian(
-                _residuals,
-                x_opt,
-                bounds=fit_bounds,
-            )
+        x_fit_opt = np.asarray(result.x, dtype=float)
 
-            # Number of observations and degrees of freedom
-            nobs = int(r0.size)
-            sse = float(np.dot(r0, r0))
-            dof = int(max(1, nobs - npar))
-            sigma2 = float(sse / dof)
+        # Jacobian and residuals at the optimum (fit space)
+        J, r0 = _compute_jacobian(_residuals, x_fit_opt, bounds=fit_bounds)
 
-            # Determine default truncation threshold for singular values.  Use
-            # max(J.shape) * machine epsilon as suggested for numerical stability,
-            # but do not go below 1e-12 to avoid overly tiny cut-offs on small
-            # problems.
-            if J.size == 0:
-                # No residuals; skip covariance estimation
-                raise ValueError("Jacobian is empty; cannot estimate covariance.")
-            rcond_default = max(J.shape) * np.finfo(float).eps
-            if rcond_default < 1e-12:
-                rcond_default = 1e-12
+        nobs = int(r0.size)
+        sse = float(np.dot(r0, r0))
+        dof = int(max(1, nobs - npar))
+        sigma2 = float(sse / dof)
 
-            # Perform SVD-based covariance estimation.  Use the same function
-            # previously defined in this module.  It returns covariance, standard
-            # errors, correlation matrix and a diagnostics dictionary.
-            cov, se, corr, svd_info = cov_from_jacobian_svd(
-                J,
-                sse=sse,
-                dof=dof,
-                rcond=rcond_default,
-            )
+        if J.size == 0:
+            raise ValueError("Jacobian is empty; cannot estimate covariance.")
 
-            # Determine the multiplier for 95% confidence intervals using the
-            # Student-t distribution when available; otherwise fall back to
-            # approximately 1.96 (Z-score).
-            if _student_t is not None:
-                try:
-                    ci_mult = float(_student_t.ppf(0.975, dof))
-                except Exception:
-                    ci_mult = 1.959963984540054
-            else:
+        rcond_default = max(J.shape) * np.finfo(float).eps
+        if rcond_default < 1e-12:
+            rcond_default = 1e-12
+
+        # Covariance in fit space (x)
+        cov_fit, se_fit, _corr_fit, svd_info = cov_from_jacobian_svd(
+            J,
+            sse=sse,
+            dof=dof,
+            rcond=rcond_default,
+        )
+
+        se_fit = np.asarray(se_fit, dtype=float)
+
+        # Student-t multiplier for 95% CIs
+        if _student_t is not None:
+            try:
+                ci_mult = float(_student_t.ppf(0.975, dof))
+            except Exception:
                 ci_mult = 1.959963984540054
+        else:
+            ci_mult = 1.959963984540054
 
-            # Assemble the output dictionary
-            error_info = {
-                'method': 'gauss-newton (jacobian) + svd',
-                'cov': cov,
-                'se': se,
-                'corr': corr,
-                'sse': sse,
-                'sigma2': sigma2,
-                'dof': dof,
-                'ci_mult_95': ci_mult,
-                'nobs': nobs,
-                'npar': npar,
-                'singular_values': svd_info.get('singular_values'),
-                'effective_rank': svd_info.get('effective_rank'),
-                'condition_number_kept': svd_info.get('condition_number_kept'),
-            }
+        # Map covariance and standard errors to physical parameter space.
+        scale = np.ones(npar, dtype=float)
+        for i, n in enumerate(fit_names):
+            if log_flags.get(n, False):
+                scale[i] = float(np.exp(x_fit_opt[i]))
 
-            # Attach names and point estimates for reporting
-            error_info['fit_names'] = list(fit_names)
-            error_info['x_opt'] = x_opt
+        cov = np.asarray(cov_fit, dtype=float) * scale[:, None] * scale[None, :]
+        diag = np.diag(cov)
+        se = np.sqrt(np.clip(diag, 0.0, np.inf))
 
-            # Convenience dicts: standard errors by name and 95% confidence intervals
-            se_arr = np.asarray(se, dtype=float)
-            error_info['se_by_name'] = {n: float(se_arr[i]) for i, n in enumerate(fit_names)}
-            ci_dict: Dict[str, Tuple[float, float]] = {}
-            for i, n in enumerate(fit_names):
-                val = float(x_opt[i])
-                se_i = float(se_arr[i]) if i < se_arr.size else float('nan')
-                lo = val - ci_mult * se_i
-                hi = val + ci_mult * se_i
-                ci_dict[n] = (lo, hi)
-            error_info['ci95_by_name'] = ci_dict
+        outer = np.outer(se, se)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            corr = cov / outer
+        corr[~np.isfinite(corr)] = np.nan
+
+        # Point estimates in physical space (for reporting / convenience)
+        x_opt_phys = np.asarray([
+            float(np.exp(x_fit_opt[i])) if log_flags.get(n, False) else float(x_fit_opt[i])
+            for i, n in enumerate(fit_names)
+        ], dtype=float)
+
+        # 95% CI bounds computed in fit space and transformed if needed.
+        ci95_by_name: Dict[str, Tuple[float, float]] = {}
+        for i, n in enumerate(fit_names):
+            lo_fit = float(x_fit_opt[i] - ci_mult * se_fit[i])
+            hi_fit = float(x_fit_opt[i] + ci_mult * se_fit[i])
+            if log_flags.get(n, False):
+                lo = float(np.exp(lo_fit))
+                hi = float(np.exp(hi_fit))
+            else:
+                lo = lo_fit
+                hi = hi_fit
+            ci95_by_name[n] = (lo, hi)
+
+        error_info = {
+            'method': 'gauss-newton (jacobian) + svd',
+            'fit_names': list(fit_names),
+            'x_opt_fit': x_fit_opt,
+            'x_opt': x_opt_phys,
+            'cov': cov,
+            'se': se,
+            'corr': corr,
+            'se_by_name': {n: float(se[i]) for i, n in enumerate(fit_names)},
+            'ci95_by_name': ci95_by_name,
+            'sse': sse,
+            'sigma2': sigma2,
+            'dof': dof,
+            'ci_mult_95': ci_mult,
+            'nobs': nobs,
+            'npar': npar,
+            'singular_values': svd_info.get('singular_values'),
+            'effective_rank': svd_info.get('effective_rank'),
+            'condition_number_kept': svd_info.get('condition_number_kept'),
+        }
+
     except Exception as e:
-        # Catch any error during covariance estimation and log a warning.
         logger.warning(f"Parameter covariance estimation failed: {e}")
+        return None
 
     return error_info
 
@@ -1258,7 +1286,10 @@ def write_results(result, fit_names, fix_dict, config, exp_data, error_info, out
     corr_path = output_dir / 'correlation_matrix.tsv'
     corr_plot_path = output_dir / 'correlation_matrix.png'
 
+    objective_mode = str(config.get('fitting', {}).get('objective', 'experiments_equal')).strip().lower()
+
     with open(report_path, 'w') as rep:
+        rep.write(f"Objective mode: {objective_mode}\n\n")
         rep.write("Fitted parameters:\n")
         for name, val in fitted.items():
             rep.write(f"  {name}: {val}\n")
@@ -1342,24 +1373,92 @@ def write_results(result, fit_names, fix_dict, config, exp_data, error_info, out
 
             rep.write(f"  {exp_name}: {rmsd}\n")
 
-            plt.figure()
-            plt.plot(ratios, heats_sim, label='Simulated', marker="o")
+            # Create figure with GridSpec for better layout control
+            fig = plt.figure()
+            gs = fig.add_gridspec(2, 1, height_ratios=[4, 1], hspace=0.05)
+            ax_main = fig.add_subplot(gs[0])
+            ax_residual = fig.add_subplot(gs[1], sharex=ax_main)
+
+            # Main plot
+            ax_main.plot(ratios, heats_sim, label='Simulated', marker="o")
 
             # Plot experimental heats using filled squares for included points and hollow squares for excluded points
             include = data['include']
-            x = data['molar_ratio']
+            x = ratios #data['molar_ratio']
             heats_exp = data['heats']
             included_ratios = [r for r, inc in zip(x, include) if inc]
             included_heats = [h for h, inc in zip(heats_exp, include) if inc]
             excluded_ratios = [r for r, inc in zip(x, include) if not inc]
             excluded_heats = [h for h, inc in zip(heats_exp, include) if not inc]
-            plt.plot(included_ratios, included_heats, linestyle='None', marker='s', markersize=8, label='Experimental', color='black')
+            
+            ax_main.plot(included_ratios, included_heats, linestyle='None', marker='s', markersize=8, label='Experimental', color='black')
             if excluded_ratios:
-                plt.plot(excluded_ratios, excluded_heats, linestyle='None', marker='s', markersize=8, fillstyle='none', color='black')
-            plt.xlabel('Molar ratio (titrant/macromolecule)')
-            plt.ylabel('Heat per mole injected (J/mol)')
-            plt.title('ITC Isotherm: simulation vs experiment')
-            plt.legend()
+                ax_main.plot(excluded_ratios, excluded_heats, linestyle='None', marker='s', markersize=8, fillstyle='none', color='black')
+            
+            ax_main.set_ylabel('Heat per mole injected (J/mol)')
+            ax_main.set_title('ITC Isotherm: simulation vs experiment')
+            ax_main.legend()
+            ax_main.tick_params(labelbottom=False)  # Remove x-axis labels from main plot
+
+            # Residual plot
+            # Calculate residuals only for included points
+            residuals_included = []
+            residuals_excluded = []
+            heats_sim_included = []
+            heats_sim_excluded = []
+            
+            for i, (ratio, heat_exp, is_included) in enumerate(zip(x, heats_exp, include)):
+                # Find corresponding simulated value
+                sim_idx = np.argmin(np.abs(np.array(ratios) - ratio))
+                heat_sim = heats_sim[sim_idx]
+                residual = heat_exp - heat_sim
+                
+                if is_included:
+                    residuals_included.append(residual)
+                    heats_sim_included.append(heat_sim)
+                else:
+                    residuals_excluded.append(residual)
+                    heats_sim_excluded.append(heat_sim)
+            
+            # Set y-axis range based on included points only
+            if residuals_included:
+                max_residual = np.max(np.abs(residuals_included))
+                y_limit = max_residual * 1.3  # 20% padding
+            else:
+                y_limit = 1.0
+            
+            ax_residual.axhline(y=0, color='black', linestyle='-', linewidth=0.5)
+            
+            # Plot included residuals with filled squares
+            if included_ratios:
+                ax_residual.plot(included_ratios, residuals_included, linestyle='None', marker='s', markersize=8, color='black')
+            
+            # Plot excluded residuals with hollow squares
+            if excluded_ratios:
+                ax_residual.plot(excluded_ratios, residuals_excluded, linestyle='None', marker='s', markersize=8, fillstyle='none', color='black')
+            
+            ax_residual.set_ylim(-y_limit, y_limit)
+            ax_residual.set_ylabel('')
+            ax_residual.set_xlabel('Molar Ratio (titrant/macromolecule)')
+            
+            # Export plotted data to CSV
+            export_path = output_dir / f'plot_data_{exp_name}.csv'
+            export_df = pd.DataFrame({
+                'molar_ratio': ratios,
+                'experimental_heat': heats_exp,
+                'included': include,
+            })
+            # Add simulated heats by finding nearest ratio match
+            simulated_heats = []
+            for ratio in x:
+                sim_idx = np.argmin(np.abs(np.array(ratios) - ratio))
+                simulated_heats.append(heats_sim[sim_idx])
+            export_df['simulated_heat'] = simulated_heats
+            # Add residuals
+            export_df['residual'] = export_df['experimental_heat'] - export_df['simulated_heat']
+            
+            export_df.to_csv(export_path, index=False)
+            
             plt.savefig(plot_path, dpi=300)
             plt.close()
 
@@ -1402,7 +1501,7 @@ def main() -> None:
     # Subparser for fit
     parser_fit = subparsers.add_parser('fit', help='Fit model parameters to experimental data')
     parser_fit.add_argument('--config', type=Path, required=True, help='YAML configuration file produced by build_config')
-    parser_fit.add_argument('--output', type=Path, required=False, default=None, help='Directory where results will be written (default: results_<config_name>)')
+    parser_fit.add_argument('--output', type=Path, required=False, default=None, help='Directory where results will be written (default: results/results_<config_name>)')
 
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging output')
 
@@ -1417,16 +1516,31 @@ def main() -> None:
         out = args.output if args.output is not None else Path(f"config_{models_list[0].stem}.yaml")
         build_config(models_list, data_list, out)
     elif args.command == 'fit':
-        base_results = Path('results')
-        if args.output is None:
+        
+        out_dir = ""
+        if args.output is None: # No output provided, create subfolder based on config name
             cfg_stem = Path(args.config).stem
             if cfg_stem.startswith('config_'):
                 cfg_stem = cfg_stem[len('config_'):]
             subfolder = f"results_{cfg_stem}"
-        else:
-            # Use the provided output's name as the subfolder
-            subfolder = Path(args.output).name
-        out_dir = base_results / subfolder
+            base_results = Path('results')
+            out_dir = base_results / subfolder
+        else: # Use the provided output's name as the subfolder
+            out_dir = Path(args.output)
+
+        # Check path writeability
+        logger.info(f"Using output directory: {out_dir}")
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            test_file = out_dir / 'test_write.tmp'
+            with open(test_file, 'w') as tf:
+                tf.write('test')
+            test_file.unlink()
+        except Exception as e:
+            logger.error(f"Cannot write to output directory '{out_dir}': {e}")
+            sys.exit(1)
+        logger.info("  Output directory is writable.")
+        
         fit_model(args.config, out_dir)
 
 

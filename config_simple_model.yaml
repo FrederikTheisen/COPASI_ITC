@@ -1,10 +1,19 @@
+# This config file was generated from the provided COPASI model(s).
+# You can edit the parameters as needed before running.
+#  - Properties: value, min, max, fit, and log.
+# The 'fitting' block contains settings for the optimization:
+#  - max_iterations: maximum number of optimization iterations
+#  - estimate_errors: compute parameter confidence intervals
+#  - objective: 'experiments' to weight each experiment equally, or 'points' to weight each data point equally
+
 fitting:
   max_iterations: 1000
   estimate_errors: true
+  objective: experiments
 experiments:
-- name: simple_model_230906_PRLR_P393V_run1
+- name: exp_1
   model_path: examples/simple/simple_model.cps
-  data_path: examples/simple/230906_PRLR_P393V_run1.csv
+  data_path: examples/simple/230908_PRLRlong_W392A_run1.csv
   experiment_info:
     cell_compartment_name: cell
     syringe_compartment_name: syringe
@@ -15,7 +24,11 @@ experiments:
     syringe_species_initial_conc:
       A{syringe}: 2140.0
   parameters:
-    N_B_simple_model_230906_PRLR_P393V_run1: 1.0
-    Kd: 30
-    dH_reaction: -13700
-    Offset_simple_model_230906_PRLR_P393V_run1: 0
+    N_B_exp_1: 1.0
+    Kd:
+      value: 0.001
+      log: true
+    dH_reaction: -20000.0
+    Offset_exp_1:
+      value: 0.0
+      fit: true
