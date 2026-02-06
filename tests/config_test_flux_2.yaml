@@ -1,6 +1,7 @@
 # This config file was generated from the provided COPASI model(s).
 # You can edit the parameters as needed before running.
 #  - Properties: value, min, max, fit, and log.
+#  - If parameter is given the name of another parameter as value, it will be treated as an alias.
 # The 'fitting' block contains settings for the optimization:
 #  - max_iterations: maximum number of optimization iterations
 #  - estimate_errors: compute parameter confidence intervals
@@ -9,30 +10,29 @@
 fitting:
   max_iterations: 1000
   estimate_errors: true
-  objective: points
+  objective: experiments
 experiments:
 - name: exp_1
-  model_path: examples/simple_model.cps
-  data_path: examples/simple/testdata.csv
-  injection_info:
-    number: 20
-    volumes: 2e-6
-    delay: 1000
+  model_path: tests/model_test_flux_2.cps
+  data_path: ''
   experiment_info:
     cell_compartment_name: cell
     syringe_compartment_name: syringe
-    cell_volume: 0.000200
-    fallback_inj_delay: 0.1
+    cell_volume: 0.0002
+    fallback_inj_delay: 150.0
     cell_species_initial_conc:
-      B: 100
+      B: 10.0
+      AB: 0
     syringe_species_initial_conc:
-      A{syringe}: 1000
+      A{syringe}: 100.0
+  sim_inj_info:
+    number: 20
+    delay: 0.1
   parameters:
-    N_B_exp_1: 1
-    Kd:
-      value: 1
-      log: true
-    dH_reaction: -35100.0
+    N_B_exp_1: 1.0
+    N_AB_exp_1: 1.0
+    K: 1
+    dH_reaction: -1
     Offset_exp_1:
-      value: 10
+      value: 0.0
       fit: true

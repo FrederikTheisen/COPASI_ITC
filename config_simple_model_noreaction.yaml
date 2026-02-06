@@ -12,25 +12,23 @@ fitting:
   objective: points
 experiments:
 - name: exp_1
-  model_path: examples/simple_model.cps
+  model_path: examples/simple_model_noreaction.cps
   data_path: examples/simple/testdata.csv
-  injection_info:
-    number: 20
-    volumes: 2e-6
-    delay: 1000
   experiment_info:
     cell_compartment_name: cell
     syringe_compartment_name: syringe
     cell_volume: 0.000200
-    fallback_inj_delay: 0.1
+    fallback_inj_delay: 150.0
     cell_species_initial_conc:
       B: 100
+      A{cell}: 100
     syringe_species_initial_conc:
       A{syringe}: 1000
   parameters:
     N_B_exp_1: 1
+    N_A{cell}_exp_1: 1
     Kd:
-      value: 1
+      value: 4.01
       log: true
     dH_reaction: -35100.0
     Offset_exp_1:

@@ -1,7 +1,7 @@
 """
 This script implements a command line tool to perform analysis of
 isothermal titration calorimetry (ITC) experiments using COPASI models.  It
-supports two main workflows:
+supports three main workflows:
 
 1. GENERATE CONFIG FILE: Extract global parameters and other key
    information from a COPASI model and produce a YAML configuration file.
@@ -11,6 +11,10 @@ supports two main workflows:
    simulations to mimic the injections, compute the theoretical heat released
    per injection and optimise the chosen parameters to fit the experimental
    data.
+
+3. SIMULATE EXPERIMENTS: Given a COPASI model and configuration YAML, run
+   simulations without experimental data to examine the expected shape of
+   the system under the configured parameters.
 
 This implementation relies on the `basiCO` package to interface with
 COPASI.  The current environment may not include COPASI or basiCO; the
@@ -29,15 +33,30 @@ Usage::
         --config config.yaml \
         --output results
 
-The fitting routine will create ``results_report.txt``, ``results_fit.yaml`` and
+    # or simulate without data
+
+    python itc_simulation.py sim \
+        --config config.yaml \
+        --output results
+
+The fitting/simulation routines will create ``results_report.txt``, ``results_fit.yaml`` and
 ``results_plot.png`` in the specified output directory.
 """
 
-### COLUMN HEADERS ###
+######################
+###### SETTINGS ######
+######################
+
+### DATA FILE COLUMN HEADERS ###
 INJECTION_VOLUME_SUBSTRINGS = ['v_inj', 'volume', 'vol']
 INJECTION_DELAY_SUBSTRINGS = ['delay']
 HEAT_DATA_SUBSTRINGS = ['heat', 'enthalpy', 'q', 'peak']
 INCLUDE_FLAG_SUBSTRINGS = ['include']
+
+### OPTIONS ###
+DEFAULT_MAX_ITERATIONS = 1000
+DEFAULT_INJECTION_DELAY = 150.0
+PRINT_INFO_TO_CONFIG = True
 
 
 import argparse
@@ -82,22 +101,6 @@ except Exception:
     _approx_derivative = None  # type: ignore
 
 
-
-def _default_bounds(value: float) -> Tuple[float, float]:
-    """Return a default (min, max) bound around a parameter value.
-    Returns
-    -------
-    tuple
-        A (min, max) tuple representing default bounds.
-    """
-    if value == 0:
-        return (-1.0, 1.0)
-    # choose one order of magnitude around the absolute value
-    magnitude = abs(value)
-    return (0.01 * magnitude if value > 0 else 1.1 * value,
-            100 * magnitude if value > 0 else -0.1 * value)
-
-
 def split_species_compartment(name: str, default_compartment: str, valid_compartments: List[str]) -> Tuple[str, Optional[str]]:
     """Split a species name into base name and optional compartment.
 
@@ -126,7 +129,6 @@ def split_species_compartment(name: str, default_compartment: str, valid_compart
     
     return name, default_compartment  # default compartment
 
-
 def get_species_concentration(model, compartment = None) -> Dict[str, float]:
     """Retrieve species concentrations from a basiCO model."""
     species_df = basico.get_species(model=model).reset_index()
@@ -140,10 +142,8 @@ def get_species_concentration(model, compartment = None) -> Dict[str, float]:
 
     return conc
 
-
 def make_species_name(base: str, compartment: Optional[str]) -> str:
     return f"{base}{{{compartment}}}" if compartment else base
-
 
 def get_parameter_name(name, type: str) -> str:
     if not isinstance(name, str):
@@ -162,16 +162,13 @@ def get_parameter_name(name, type: str) -> str:
     
     return type + "_" + name
 
-
 def sanitize_for_param(name: str) -> str:
     return ''.join(ch if ch.isalnum() else '_' for ch in name)
-
 
 def _extract_param_value(info):
     if isinstance(info, dict) and 'value' in info:
         return info['value']
     return info
-
 
 def _parse_param_value(raw, pname: str) -> Tuple[Optional[float], Optional[str]]:
     if isinstance(raw, str):
@@ -186,7 +183,6 @@ def _parse_param_value(raw, pname: str) -> Tuple[Optional[float], Optional[str]]
         return float(raw), None
     except (TypeError, ValueError):
         raise ValueError(f"Parameter '{pname}' has an invalid value: {raw!r}")
-
 
 def resolve_parameter_values(parameters: Dict[str, object], overrides: Optional[Dict[str, float]] = None) -> Dict[str, float]:
     base_values: Dict[str, float] = {}
@@ -241,12 +237,10 @@ def resolve_parameter_values(parameters: Dict[str, object], overrides: Optional[
 
     return resolved
 
-
 def _param_uses_log_scale(pname: str, info_dict: Dict[str, object], exp_names: List[str]) -> bool:
     if isinstance(info_dict, dict) and 'log' in info_dict:
         return bool(info_dict['log'])
     return False
-
 
 def _vector_to_param_dict(x: np.ndarray, fit_names: List[str], log_flags: Dict[str, bool]) -> Dict[str, float]:
     out: Dict[str, float] = {}
@@ -290,14 +284,14 @@ def check_and_repair_config(config):
     required_model_elements = ['cell_compartment_name', 'syringe_compartment_name', 'cell_volume', 'cell_species_initial_conc', 'syringe_species_initial_conc']
 
     for exp in config['experiments']:
-        logger.info(f' -Checking {exp["name"]}...')
+        logger.info(f' - Checking {exp["name"]}...')
         for key in required_elements:
             if key not in exp:
-                logger.fatal(f' -Experiment {exp["name"]} missing {key}. Quitting.')
+                logger.fatal(f' - Experiment {exp["name"]} missing {key}. Quitting.')
                 quit()
         for key in required_model_elements:
             if key not in exp['experiment_info']:
-                logger.fatal(f' -Configuration file "experiment_info" missing key {key}. Quitting.')
+                logger.fatal(f' - Configuration file "experiment_info" missing key {key}. Quitting.')
                 quit()
         if 'parameters' not in exp or len(exp['parameters']) == 0:
             logger.warning(f'Experiment {exp["name"]} does not contain any parameters. It is recommended to have individual N and Offset values.')
@@ -320,7 +314,7 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
 
     config_out = {'fitting' : 
         {
-        'max_iterations':   1000,
+        'max_iterations':   DEFAULT_MAX_ITERATIONS,
         'estimate_errors': True,
         'objective': 'experiments',
         }   
@@ -376,7 +370,10 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
         exp_info['cell_compartment_name'] = cell_compartment_name
         exp_info['syringe_compartment_name'] = syringe_compartment_name
         exp_info['cell_volume'] = float(cell_volume) if cell_volume is not None else 1.0
-        exp_info['fallback_inj_delay'] = float(150)
+        exp_info['fallback_inj_delay'] = float(DEFAULT_INJECTION_DELAY)
+
+        if exp_info['cell_volume'] > 0.01:
+            logger.warning(f"{exp_info['name']} cell volume of {exp_info['cell_volume']} is high. Please check the model and volume. Unit should be liters. Common values are 0.0002 for 200uL or 0.0015 for 1.5mL.")
         
         logger.info("  Identifying species...")
         species_df = basico.get_species(model=model).reset_index()
@@ -458,13 +455,15 @@ def build_config(model_paths: List[Path], data_paths: Optional[List[Path]], outp
     
     config_out['experiments'] = experiments_list
     with open(output_path, 'w') as f:
-        f.write("# This config file was generated from the provided COPASI model(s).\n")
-        f.write("# You can edit the parameters as needed before running.\n")
-        f.write("#  - Properties: value, min, max, fit, and log.\n")
-        f.write("# The 'fitting' block contains settings for the optimization:\n")
-        f.write("#  - max_iterations: maximum number of optimization iterations\n")
-        f.write("#  - estimate_errors: compute parameter confidence intervals\n")
-        f.write("#  - objective: 'experiments' to weight each experiment equally, or 'points' to weight each data point equally\n\n")
+        if PRINT_INFO_TO_CONFIG:
+            f.write("# This config file was generated from the provided COPASI model(s).\n")
+            f.write("# You can edit the parameters as needed before running.\n")
+            f.write("#  - Properties: value, min, max, fit, and log.\n")
+            f.write("#  - If parameter is given the name of another parameter as value, it will be treated as an alias.\n")
+            f.write("# The 'fitting' block contains settings for the optimization:\n")
+            f.write("#  - max_iterations: maximum number of optimization iterations\n")
+            f.write("#  - estimate_errors: compute parameter confidence intervals\n")
+            f.write("#  - objective: 'experiments' to weight each experiment equally, or 'points' to weight each data point equally\n\n")
 
         yaml.dump(config_out, f, sort_keys=False)
     
@@ -544,7 +543,11 @@ def parse_data(data_path: Path, inj_delay: float = 150.0) -> Tuple[List[float], 
 def setup_odes(model, parameters):
     # Set up ODEs for each reaction in the cell in order to quantify flux and derive released heat
     logger.debug(f"Setting up ODEs for tracking of reaction flux")
-    reactions_df = basico.get_reactions(model=model).reset_index()
+    reactions_df = basico.get_reactions(model=model)
+
+    if reactions_df is None: return
+
+    reactions_df = reactions_df.reset_index()
     # Collect all dH_ keys
     enthalpies = [key[3:] for key in parameters.keys() if 'dH_' in key]
 
@@ -603,20 +606,21 @@ def simulate(
         cell_species_initial_conc_cfg = model_info_cfg.get('cell_species_initial_conc', {}) or {}
         syringe_species_initial_conc_cfg = model_info_cfg.get('syringe_species_initial_conc', {}) or {}
         for sname, sval in cell_species_initial_conc_cfg.items():
-            n_value = params["N_" + sname + "_" + exp_name]
+            n_value = params.get("N_" + sname + "_" + exp_name, 1.0)
             M_cell += sval
             logger.debug(f"Setting cell initial concentration of species '{sname}' to {float(sval)} x {n_value} in model.")
             basico.set_species(model=model, name=sname, compartment=model_info_cfg.get('cell_compartment_name', 'cell'), initial_concentration=float(sval)*float(n_value))
         for sname, sval in syringe_species_initial_conc_cfg.items():
-            logger.debug(f"Setting syringe initial concentration of species '{sname}' to {float(sval)} in model.")
-            basico.set_species(model=model, name=sname, compartment=model_info_cfg.get('syringe_compartment_name', 'syringe'), initial_concentration=float(sval))
+            n_value = params.get("N_" + sname + "_" + exp_name, 1.0)
+            logger.debug(f"Setting syringe initial concentration of species '{sname}' to {float(sval)} x {n_value} in model.")
+            basico.set_species(model=model, name=sname, compartment=model_info_cfg.get('syringe_compartment_name', 'syringe'), initial_concentration=float(sval)*float(n_value))
 
         # apply numeric parameters to model
         logger.debug("Applying parameters to model...")
         global_params_df = basico.get_parameters(model=model).reset_index()
         for pname, pval in params.items():
             if pname not in global_params_df['name'].values: continue # Do not set parameters not in model
-            logger.debug(f" -Setting parameter '{pname}' to {pval} in model.")
+            logger.debug(f" - Setting parameter '{pname}' to {pval} in model.")
             basico.set_parameters(model=model, name=pname, initial_value=float(pval), value=float(pval))
 
         # cell volume
@@ -681,8 +685,8 @@ def simulate(
         molar_ratio: List[float] = []
         M_inj = 0.0
 
-        logger.debug(f"  Total cell species concentration: {get_species_concentration(model, cell_compartment_name)}")
-        logger.debug(f"  Total syringe species concentration: {total_syringe_conc}")
+        logger.debug(f"  Total cell species concentration: {M_cell} | {get_species_concentration(model, cell_compartment_name)}")
+        logger.debug(f"  Total syringe species concentration: {total_syringe_conc} | {get_species_concentration(model, syringe_compartment_name)}")
 
         q_pre = 0.0
 
@@ -711,18 +715,29 @@ def simulate(
                     is_injected = True
 
                 # mixing with dilution adjustment
-                # new_val = (sconc * cell_volume + conc_inj * v_inj) / (cell_volume + v_inj)
-
                 new_val = sconc * alpha + conc_inj * (1 - alpha)
                 
-                basico.set_species(model=model, name=make_species_name(name, cell_compartment_name if is_injected else None), initial_concentration=new_val)
+                logger.debug(f"   - Setting species '{name}' to {new_val:.4g} (was {sconc:.4g}, injected {conc_inj:.4g})")
+
+                basico.set_species(model=model, name=make_species_name(name, cell_compartment_name if is_injected else None), initial_concentration=new_val, concentration=new_val, update_model=True)
  
+            ### TESTING CODE ############################################################
+            s = ""                                                                      #
+            conc = get_species_concentration(model, compartment=cell_compartment_name)  #
+            for name, sconc in conc.items():                                            #
+                s += f"{sconc},"                                                        #
+            #############################################################################
+
             # Simulate for duration of injection delay
             basico.run_time_course(model=model, duration=d_inj, update_model=True)
 
-            #conc = get_species_concentration(model, compartment=cell_compartment_name)
-            #for name, sconc in conc.items():
-            #    print(name, sconc)
+            ### TESTING CODE ############################################################
+            conc = get_species_concentration(model, compartment=cell_compartment_name)  #
+            for name, sconc in conc.items():                                            #
+                s += f"{sconc},"                                                        #
+                                                                                        #
+            print(s)                                                                    #
+            #############################################################################
 
             # Get ODE fluxes
             odes_post = get_odes(model)
@@ -738,9 +753,14 @@ def simulate(
             heats.append(delta_h)
 
             # Calculate molar ratio of injected protein species versus cell species
-            M_inj  = M_inj * alpha +  total_syringe_conc * (1 - alpha)  #(M_inj * cell_volume + inj_mass) / (cell_volume + v_inj)     
+            M_inj  = M_inj * alpha + total_syringe_conc * (1 - alpha)  #(M_inj * cell_volume + inj_mass) / (cell_volume + v_inj)     
             M_cell = M_cell * alpha                                     #(M_cell * cell_volume) / (cell_volume + v_inj)
-            x = M_inj / M_cell
+            
+            # Determine x-axis for plotting purposes
+            x = 0.0
+            if M_cell > 0: x = M_inj / M_cell
+            else: x = M_inj
+            
             molar_ratio.append(x)
 
             q_pre = q_post
@@ -751,9 +771,9 @@ def simulate(
             for idx, heat in enumerate(heats):
                 logger.debug(f"  Injection #{idx}:\t{molar_ratio[idx]:.7g}\t{heat:.4g} J")
 
-        #quit()
 
         return heats, molar_ratio
+
 
 def _objective(param_dict: Dict, config: Dict, data: Dict, model_path: Path) -> float:
     #heats_sim, _ = simulate(model_path=model_path, config=config, volumes=data['volumes'], delays=data['delays'], param_values=param_dict)
@@ -840,7 +860,6 @@ def cov_from_jacobian_svd(J: np.ndarray, sse: float, dof: int, rcond: float = 1e
 
     return cov, se, corr, diag_info
 
-
 def _residuals_concat(
     x_fit: np.ndarray,
     fit_names: List[str],
@@ -870,7 +889,6 @@ def _residuals_concat(
         return np.asarray([], dtype=float)
     # Concatenate along the first dimension to get a single vector of residuals.
     return np.concatenate(residuals_all)
-
 
 def _compute_jacobian(
     residuals_func,
@@ -942,7 +960,7 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
         # Use the default 150s injection delay when no explicit delay column exists
         data_file = exp.get('data_path', "")
         exp_info = exp.get('experiment_info', {}) or {}
-        default_delay = float(exp_info.get('fallback_inj_delay', exp_info.get('fallbak_inj_delay', 150)))
+        default_delay = float(exp_info.get('fallback_inj_delay', 150))
         logger.info(f'  Experiment {exp["name"]}')
         logger.info(f'    Model: {exp["model_path"]}')
         logger.info(f'    Data:  {data_file}')
@@ -970,6 +988,11 @@ def fit_model(config_path: Path, output_dir: Path) -> None:
             exp['experiment_info'] = exp_info
 
         exp_data.append(data)
+
+    # Save a copy of the config used for fitting in the output directory for reference
+    fit_config_path = output_dir / 'config_run.yaml'
+    with open(fit_config_path, 'w') as cfgf:
+        yaml.dump(config, cfgf, sort_keys=False)
     
     ###################################################
     ### Construct parameter vector for fitting      ###
@@ -1265,6 +1288,125 @@ def estimate_errors(
 
     return error_info
 
+def sim_model(config_path: Path, output_dir: Path) -> None:
+    """Simulate ITC experiments without fitting to data.
+    
+    Runs simulations using parameters from the config and generates
+    plots showing the expected titration curves.
+    """
+    # Load configuration
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+        config = check_and_repair_config(config)
+
+    print()
+    logger.info(f'Starting simulation...')
+
+    experiments_config = config['experiments']
+    exp_names = [str(exp.get('name', '')) for exp in experiments_config]
+    num_exps = len(experiments_config)
+
+    # Prepare output directory
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / 'simulation_report.txt'
+    fit_config_path = output_dir / 'config_run.yaml'
+    with open(fit_config_path, 'w') as cfgf:
+        yaml.dump(config, cfgf, sort_keys=False)
+
+    logger.info(f'Simulating {num_exps} experiments...')
+    
+    # Collect all parameters (all are "fixed" in sim mode since we're not fitting)
+    param_dict: Dict[str, float] = {}
+    for exp in experiments_config:
+        for pname, info in exp.get('parameters', {}).items():
+            if pname in param_dict:
+                continue
+            raw = _extract_param_value(info)
+            value, alias = _parse_param_value(raw, pname)
+            if alias is not None:
+                # Resolve aliases
+                if alias in exp.get('parameters', {}):
+                    raw_alias = _extract_param_value(exp['parameters'][alias])
+                    value, _ = _parse_param_value(raw_alias, alias)
+            param_dict[pname] = float(value)
+
+    param_dict = resolve_parameter_values(config['experiments'][0].get('parameters', {}), param_dict)
+
+    with open(report_path, 'w') as rep:
+        rep.write("Simulation Parameters:\n")
+        for name, val in sorted(param_dict.items()):
+            rep.write(f"  {name}: {val}\n")
+
+        rep.write("\nExperiments:\n")
+
+        for exp_idx, exp in enumerate(experiments_config):
+            exp_name = exp['name']
+            model_path = exp['model_path']
+            plot_path = output_dir / f'results_plot_{exp_name}.pdf'
+
+            logger.info(f'Simulating {exp_name}...')
+
+            # Get volumes and delays from the experiment_info (use sensible defaults)
+            exp_info = exp.get('experiment_info', {})
+            default_delay = float(exp_info.get('fallback_inj_delay', 150))
+            
+            # Use volumes/delays from config or generate reasonable defaults
+            injection_info = exp.get('sim_inj_info', {})
+            number = injection_info.get('number', 20) # 20 injections
+            volume = injection_info.get('volume', 2.0*1e-6)  # 2µL
+            delay = injection_info.get('delay', default_delay)  # seconds
+            
+            v_inj = [volume] * number
+            delays = [delay] * number
+
+            ### TESTING CODE #############################################
+            if injection_info.get('increasing_volume', False):           #
+                logger.info(f" Using Increasing injection volumes...")   #
+                for i in range(number):                                  #
+                    v_inj[i] = volume * (i + 1)                          #
+            ##############################################################
+
+            # Generate final simulation data with configured parameters
+            heats_sim, ratios = simulate(
+                model_path=model_path,
+                config=exp,
+                volumes=v_inj,
+                delays=delays,
+                param_values=param_dict)
+
+            rep.write(f"  {exp_name}: {len(heats_sim)} injections\n")
+
+            # Create plot
+            import matplotlib
+            matplotlib.use('Agg')
+            import matplotlib.pyplot as plt
+
+            fig, ax = plt.subplots(figsize=(8, 6))
+
+            # Main plot
+            ax.plot(ratios, heats_sim, label='Simulated', marker="o", color='C0')
+            ax.set_xlabel('Molar Ratio (titrant/macromolecule)')
+            ax.set_ylabel('Heat per mole injected (J/mol)')
+            ax.set_title(f'ITC Simulation: {exp_name}')
+            ax.legend()
+
+            plt.tight_layout()
+            plt.savefig(plot_path, dpi=300)
+            plt.close()
+
+            # Export simulated data
+            export_path = output_dir / f'sim_data_{exp_name}.csv'
+            export_df = pd.DataFrame({
+                'molar_ratio': ratios,
+                'simulated_heat': heats_sim,
+            })
+            export_df.to_csv(export_path, index=False)
+            logger.info(f"  Exported simulation data to {export_path}")
+
+    logger.info(f"Report written to {report_path}")
+    logger.info(f"Configuration written to {fit_config_path}")
+    logger.info(f"Simulation plots and data exported to {output_dir}")
+
 def write_results(result, fit_names, fix_dict, config, exp_data, error_info, output_dir, log_flags):
     import matplotlib
     matplotlib.use('Agg')  # use non-interactive backend
@@ -1277,7 +1419,7 @@ def write_results(result, fit_names, fix_dict, config, exp_data, error_info, out
     # Prepare output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     report_path = output_dir / 'results_report.txt'
-    fit_config_path = output_dir / 'run_config.yaml'
+    fit_config_path = output_dir / 'config_out.yaml'
     with open(fit_config_path, 'w') as cfgf:
         yaml.dump(config, cfgf, sort_keys=False)
 
@@ -1503,6 +1645,11 @@ def main() -> None:
     parser_fit.add_argument('--config', type=Path, required=True, help='YAML configuration file produced by build_config')
     parser_fit.add_argument('--output', type=Path, required=False, default=None, help='Directory where results will be written (default: results/results_<config_name>)')
 
+    # Subparser for sim
+    parser_sim = subparsers.add_parser('sim', help='Simulate ITC experiments without fitting to data')
+    parser_sim.add_argument('--config', type=Path, required=True, help='YAML configuration file produced by build_config')
+    parser_sim.add_argument('--output', type=Path, required=False, default=None, help='Directory where simulation results will be written (default: results/sim_<config_name>)')
+
     parser.add_argument('--verbose', '-v', action='store_true', help='Enable verbose logging output')
 
     args = parser.parse_args()
@@ -1542,6 +1689,33 @@ def main() -> None:
         logger.info("  Output directory is writable.")
         
         fit_model(args.config, out_dir)
+    elif args.command == 'sim':
+        
+        out_dir = ""
+        if args.output is None: # No output provided, create subfolder based on config name
+            cfg_stem = Path(args.config).stem
+            if cfg_stem.startswith('config_'):
+                cfg_stem = cfg_stem[len('config_'):]
+            subfolder = f"sim_{cfg_stem}"
+            base_results = Path('results')
+            out_dir = base_results / subfolder
+        else: # Use the provided output's name as the subfolder
+            out_dir = Path(args.output)
+
+        # Check path writeability
+        logger.info(f"Using output directory: {out_dir}")
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            test_file = out_dir / 'test_write.tmp'
+            with open(test_file, 'w') as tf:
+                tf.write('test')
+            test_file.unlink()
+        except Exception as e:
+            logger.error(f"Cannot write to output directory '{out_dir}': {e}")
+            sys.exit(1)
+        logger.info("  Output directory is writable.")
+        
+        sim_model(args.config, out_dir)
 
 
 if __name__ == '__main__':

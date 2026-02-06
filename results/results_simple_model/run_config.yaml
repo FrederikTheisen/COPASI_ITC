@@ -1,21 +1,26 @@
 fitting:
   max_iterations: 1000
   estimate_errors: true
+  objective: points_equal
 experiments:
-- name: simple_model_230906_PRLR_P393V_run1
+- name: exp_1
   model_path: examples/simple/simple_model.cps
-  data_path: examples/simple/230906_PRLR_P393V_run1.csv
+  data_path: examples/simple/230908_PRLRlong_W392A_run1.csv
   experiment_info:
     cell_compartment_name: cell
     syringe_compartment_name: syringe
     cell_volume: 0.0002071
     fallback_inj_delay: 150.0
     cell_species_initial_conc:
-      B: 213.99999999999997
+      B: 203.0
     syringe_species_initial_conc:
-      A{syringe}: 2140.0
+      A{syringe}: 2019.0
   parameters:
-    N_B_simple_model_230906_PRLR_P393V_run1: 0.9538552193363354
-    Kd: 32.114705278685165
-    dH_reaction: -13691.449694088868
-    Offset_simple_model_230906_PRLR_P393V_run1: 0.00021641948543571352
+    N_B_exp_1: 0.815
+    Kd:
+      value: 4.01
+      log: true
+    dH_reaction: -35100.0
+    Offset_exp_1:
+      value: 10
+      fit: true
