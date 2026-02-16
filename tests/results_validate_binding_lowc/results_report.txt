@@ -1,0 +1,31 @@
+Objective mode: experiments_equal
+
+Fitted parameters:
+  N_B_exp_1: 0.9615201908934417
+  Kd: 25.459227588863143
+  dH_reaction: -12402.407102131825
+  Offset_exp_1: 0.14634801699299516
+Fixed parameters:
+
+Uncertainty estimates (local, gauss-newton (jacobian) + svd):
+  nobs: 18
+  npar: 4
+  dof: 14
+  SSE (included points): 10241
+  sigma^2: 731.503
+  singular values: 24513.6, 4372.31, 3.53585, 0.314903
+  effective_rank: 4
+  condition_number_kept: 77844.82996653851
+
+Parameter	Value	StdErr	CI95_low	CI95_high
+N_B_exp_1	0.9615201909	0.003315	0.9544102192	0.9686301626
+Kd	25.45922759	0.576747	24.25179847	26.72677122
+dH_reaction	-12402.4071	84.1435	-12582.87698	-12221.93723
+Offset_exp_1	0.146348017	18.8438	-40.26957176	40.56226779
+
+Covariance matrix written to: results/results_validate_binding_lowc/covariance_matrix.tsv
+Correlation matrix written to: results/results_validate_binding_lowc/correlation_matrix.tsv
+Correlation matrix plot written to: results/results_validate_binding_lowc/correlation_matrix.png
+
+Experiment RMSDs:
+  exp_1: 23.852602780388

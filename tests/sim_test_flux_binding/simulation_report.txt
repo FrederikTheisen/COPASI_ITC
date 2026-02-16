@@ -1,0 +1,9 @@
+Simulation Parameters:
+  K: 1.0
+  N_AB_exp_1: 1.0
+  N_B_exp_1: 1.0
+  Offset_exp_1: 0.0
+  dH_reaction: -1.0
+
+Experiments:
+  exp_1: 20 injections

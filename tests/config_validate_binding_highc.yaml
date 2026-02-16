@@ -13,22 +13,23 @@ fitting:
   objective: experiments
 experiments:
 - name: exp_1
-  model_path: tests/models/model_test_flux.cps
-  data_path: ''
+  model_path: tests/models/model_validate_binding.cps
+  data_path: tests/data/validate_binding_highc.csv
   experiment_info:
     cell_compartment_name: cell
     syringe_compartment_name: syringe
-    cell_volume: 0.0002
+    cell_volume: 0.0002071
     fallback_inj_delay: 150.0
-    cell_species_initial_conc: {}
+    cell_species_initial_conc:
+      B: 10.0
     syringe_species_initial_conc:
       A{syringe}: 100.0
-  injection_info:
-    number: 20
-    delay: 1000
   parameters:
-    K: 1.0
-    dH_reaction: 1
+    N_B_exp_1: 1.0
+    Kd:
+      value: 1.0
+      log: true
+    dH_reaction: -20000.0
     Offset_exp_1:
       value: 0.0
       fit: true

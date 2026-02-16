@@ -1,0 +1,74 @@
+# This config file was generated from the provided COPASI model(s).
+# You can edit the parameters as needed before running.
+#  - Properties: value, min, max, fit, and log.
+#  - If parameter is given the name of another parameter as value, it will be treated as an alias.
+# The 'fitting' block contains settings for the optimization:
+#  - max_iterations: maximum number of optimization iterations
+#  - estimate_errors: compute parameter confidence intervals
+#  - objective: 'experiments' to weight each experiment equally, or 'points' to weight each data point equally
+
+fitting:
+  max_iterations: 1000
+  estimate_errors: true
+  objective: experiments
+experiments:
+- name: exp_1
+  model_path: cases/isomerization/isomerization_model.cps
+  data_path: cases/isomerization/data_high_conc.csv
+  experiment_info:
+    cell_compartment_name: cell
+    syringe_compartment_name: syringe
+    cell_volume: 0.0002071
+    fallback_inj_delay: 150.0
+    cell_species_initial_conc:
+      M: 104.0
+    syringe_species_initial_conc:
+      Ptrans{syringe}: 1087.0
+  parameters:
+    N_M_exp_1: 0.78
+    Kd_cis:
+      value: 0.130
+      log: true
+    k_off_cis: 
+      value: 0.2
+      fit: true
+      log: true
+    k_off_trans:
+      value: k_off_cis
+    k_cis_trans: 
+      value: 0.001
+      fit: true
+      log: true
+    K_cis_trans: 
+      value: 0.612
+      fit: false
+    R_Kd_trans_cis:
+      value: 700.0
+      fit: false
+      min: 500
+      max: 800
+    dH_cis_binding: -23000
+    dH_trans_binding: -30000
+    dH_iso_cell: 
+      value: 0
+      fit: false
+    Offset_exp_1:
+      value: 0.0
+      fit: false
+- name: exp_2
+  model_path: cases/isomerization/isomerization_model.cps
+  data_path: cases/isomerization/data_low_conc.csv
+  experiment_info:
+    cell_compartment_name: cell
+    syringe_compartment_name: syringe
+    cell_volume: 0.0002071
+    fallback_inj_delay: 150.0
+    cell_species_initial_conc:
+      M: 104.0
+    syringe_species_initial_conc:
+      Ptrans{syringe}: 1087.0
+  parameters:
+    N_M_exp_2: 1.04
+    Offset_exp_2:
+      value: 0.0
+      fit: false
