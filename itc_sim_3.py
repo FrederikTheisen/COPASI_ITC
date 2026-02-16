@@ -47,6 +47,8 @@ The fitting/simulation routines will create ``results_report.txt``, ``results_fi
 ###### SETTINGS ######
 ######################
 
+TESTING = False
+
 ### DATA FILE COLUMN HEADERS ###
 INJECTION_VOLUME_SUBSTRINGS = ['v_inj', 'volume', 'vol']
 INJECTION_DELAY_SUBSTRINGS = ['delay']
@@ -721,23 +723,26 @@ def simulate(
 
                 basico.set_species(model=model, name=make_species_name(name, cell_compartment_name if is_injected else None), initial_concentration=new_val, concentration=new_val, update_model=True)
  
-            ### TESTING CODE ############################################################
-            s = ""                                                                      #
-            conc = get_species_concentration(model, compartment=cell_compartment_name)  #
-            for name, sconc in conc.items():                                            #
-                s += f"{sconc},"                                                        #
-            #############################################################################
+            ### TESTING CODE ################################################################
+            s = ""                                                                          #
+            if TESTING:                                                                     #
+                conc = get_species_concentration(model, compartment=cell_compartment_name)  #
+                for name, sconc in conc.items():                                            #
+                    s += f"{sconc},"                                                        #
+            #################################################################################
 
             # Simulate for duration of injection delay
             basico.run_time_course(model=model, duration=d_inj, update_model=True)
 
-            ### TESTING CODE ############################################################
-            conc = get_species_concentration(model, compartment=cell_compartment_name)  #
-            for name, sconc in conc.items():                                            #
-                s += f"{sconc},"                                                        #
-                                                                                        #
-            print(s)                                                                    #
-            #############################################################################
+
+            ### TESTING CODE ################################################################
+            if TESTING:                                                                     #
+                conc = get_species_concentration(model, compartment=cell_compartment_name)  #
+                for name, sconc in conc.items():                                            #
+                    s += f"{sconc},"                                                        #
+                                                                                            #
+                print(s)                                                                    #
+            #################################################################################
 
             # Get ODE fluxes
             odes_post = get_odes(model)
@@ -1399,6 +1404,8 @@ def sim_model(config_path: Path, output_dir: Path) -> None:
             export_df = pd.DataFrame({
                 'molar_ratio': ratios,
                 'simulated_heat': heats_sim,
+                'v_inj': v_inj,
+                'delay': delays,
             })
             export_df.to_csv(export_path, index=False)
             logger.info(f"  Exported simulation data to {export_path}")
